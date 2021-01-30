@@ -3,12 +3,16 @@
 
 #include <iostream>
 #include <fstream>
+#include <chrono>
+#include <algorithm>
 
 
 /*
 Coordinates of the image start from the lower left corner.
 Image is read from left to right, row at a time (from the bottom)
 */
+
+const unsigned int blurRadius = 15;
 
 #pragma pack(1)
 struct BMP_file_header
@@ -71,34 +75,22 @@ void toGrayscale(char* image, unsigned int dataOffset, unsigned int size)
     delete[] grayscale;
 }
 
-void blur(char* image, unsigned int pixelOffset, unsigned int imageWidth, unsigned int imageHeight)
+void blurAVX(char* image, unsigned int pixelOffset, unsigned int imageWidth, unsigned int imageHeight)
 {
-    //naive implementation: width * height * intensity^2
-    //blurring per each dimension separately: width*height*intensity + width*height*intensity = 2*width*height*intensity
-        //first blur one dimension
-        //using the results from the previous point, blur the second dimension
+
+}
 
 
-    unsigned int imageSize = imageWidth * imageHeight;
-    pixel* blurredImage = new pixel[imageSize];
-    int intensity = 15;
-
-    //blur by horizontal axis first
-    //blur by vertical axis, taking into account the values gained by horizontal blurring
-
-    //optimisations: instead of using max() and min() on every step, perform calculations on the inner part of the picture that won't go out of bounds, and then
-        //perform calculations using max() and min() for the rest that can go out of bounds
-
-    int split = (intensity - 1) / 2;
-    for (unsigned int y = 0; y < imageHeight; y++)
+void horizontalBlur(pixel* blurredImage, char* image, unsigned int pixelOffset, unsigned int imageWidth, unsigned int imageHeight, unsigned int startRow, unsigned int endRow, unsigned int radius, unsigned int split)
+{
+    for (unsigned int y = startRow; y < endRow; y++)
     {
         for (unsigned int x = 0; x < imageWidth; x++)
         {
             pixel newPixel;
-            
 
             unsigned int leftEdge = std::max((unsigned int)0, x - split);
-            unsigned int rightEdge = std::min(imageWidth-1, x + split);
+            unsigned int rightEdge = std::min(imageWidth - 1, x + split);
 
             int redAccumulator = 0;
             int greenAccumulator = 0;
@@ -109,50 +101,128 @@ void blur(char* image, unsigned int pixelOffset, unsigned int imageWidth, unsign
                 greenAccumulator += ((pixel*)(image + pixelOffset + 3 * (y * imageWidth + i)))->green;
                 blueAccumulator += ((pixel*)(image + pixelOffset + 3 * (y * imageWidth + i)))->blue;
             }
-            newPixel.red = redAccumulator /intensity;
-            newPixel.green = greenAccumulator/intensity;
-            newPixel.blue = blueAccumulator/intensity;
-            
+            newPixel.red = redAccumulator / radius;
+            newPixel.green = greenAccumulator / radius;
+            newPixel.blue = blueAccumulator / radius;
+
             blurredImage[y * imageWidth + x] = newPixel;
         }
     }
-    //vertical blurring
-    for (unsigned int x = 0; x < imageWidth; x++)
+}
+
+void verticalBlur(pixel* blurredImage, char* image, unsigned int pixelOffset, unsigned int imageWidth, unsigned int imageHeight, unsigned int startRow, unsigned int endRow, unsigned int radius, unsigned int split)
+{
+    int* rowAccumulator = new int[imageWidth * 3];
+    for (unsigned int y = startRow; y < endRow; y++)
     {
-        for (unsigned int y = 0; y < imageHeight; y++)
+        //zero out the accumulator
+        std::memset(rowAccumulator, 0, imageWidth * sizeof(int) * 3);
+
+        unsigned int upperEdge = std::max((unsigned int)0, y - split);
+        unsigned int lowerEdge = std::min(imageHeight - 1, y + split);
+
+        for (unsigned int i = upperEdge; i <= lowerEdge; i++)
         {
-            pixel newPixel;
-
-            unsigned int upperEdge = std::max((unsigned int)0, y - split);
-            unsigned int lowerEdge = std::min(imageHeight - 1, y + split);
-
-            int redAccumulator = 0;
-            int greenAccumulator = 0;
-            int blueAccumulator = 0;
-            for (int i = upperEdge; i <= lowerEdge; i++)
+            for (unsigned int x = 0; x < imageWidth; x++)
             {
-                pixel tempPixel = blurredImage[i * imageWidth + x];
-                redAccumulator += tempPixel.red;
-                greenAccumulator += tempPixel.green;
-                blueAccumulator += tempPixel.blue;
+                rowAccumulator[3 * x] += blurredImage[i * imageWidth + x].red;
+                rowAccumulator[3 * x + 1] += blurredImage[i * imageWidth + x].green;
+                rowAccumulator[3 * x + 2] += blurredImage[i * imageWidth + x].blue;
             }
-            newPixel.red = redAccumulator / intensity;
-            newPixel.green = greenAccumulator / intensity;
-            newPixel.blue = blueAccumulator / intensity;
+        }
 
-            
-            image[pixelOffset + 3*(y * imageWidth + x)] = newPixel.red;
-            image[pixelOffset + 3*(y * imageWidth + x) + 1] = newPixel.green;
-            image[pixelOffset + 3*(y * imageWidth + x) + 2] = newPixel.blue;
+        for (unsigned int x = 0; x < imageWidth; x++)
+        {
+            rowAccumulator[3 * x] /= radius;
+            rowAccumulator[3 * x + 1] /= radius;
+            rowAccumulator[3 * x + 2] /= radius;
+
+            image[pixelOffset + 3 * (y * imageWidth + x)] = rowAccumulator[3 * x];
+            image[pixelOffset + 3 * (y * imageWidth + x) + 1] = rowAccumulator[3 * x + 1];
+            image[pixelOffset + 3 * (y * imageWidth + x) + 2] = rowAccumulator[3 * x + 2];
         }
     }
+    delete[] rowAccumulator;
+}
 
-        int totalSize = imageSize * 3;
-        //memcpy(image + pixelOffset, blurredImage, totalSize);
-        std::ofstream outputFile("blurred.bmp", std::ios::out | std::ios::binary);
-        outputFile.write(image, totalSize+sizeof(headers));
-        outputFile.close();
-        delete[] blurredImage;
+void blur(char* image, unsigned int pixelOffset, unsigned int imageWidth, unsigned int imageHeight, unsigned int startRow, unsigned int endRow)
+{
+    //naive implementation: width * height * intensity^2
+    //blurring per each dimension separately: width*height*intensity + width*height*intensity = 2*width*height*intensity
+        //first blur one dimension
+        //using the results from the previous point, blur the second dimension
+
+    /*
+        Benchmark:
+        -radius 3:   0.15 (cache thrashing version), 0.1 (cache efficient version)
+        -radius 5:   0.17 (cache thrashing version), 0.12 (cache efficient version)
+        -radius 11:  0.22 (cache thrashing version), 0.18 (cache efficient version)
+        -radius 15:  0.25 (cache thrashing version), 0.22 (cache efficient version)
+    */
+
+    auto start = std::chrono::high_resolution_clock::now();
+
+    int split = (blurRadius - 1) / 2;
+    unsigned int imageSize = imageWidth * imageHeight;
+    pixel* blurredImage = new pixel[imageSize];
+
+    horizontalBlur(blurredImage, image, pixelOffset, imageWidth, imageHeight, startRow, endRow, blurRadius, split);
+    verticalBlur(blurredImage, image, pixelOffset, imageWidth, imageHeight, startRow, endRow, blurRadius, split);
+
+    int totalSize = imageSize * 3;
+    memcpy(image + pixelOffset, blurredImage, totalSize);
+    std::ofstream outputFile("blurred.bmp", std::ios::out | std::ios::binary);
+    outputFile.write(image, (std::streamsize)totalSize+sizeof(headers));
+    outputFile.close();
+
+    //blur by horizontal axis first
+    //blur by vertical axis, taking into account the values gained by horizontal blurring
+
+    //optimisations: instead of using max() and min() on every step, perform calculations on the inner part of the picture that won't go out of bounds, and then
+        //perform calculations using max() and min() for the rest that can go out of bounds
+
+   
+
+    auto stop = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> elapsed = stop - start;
+
+    std::cout << "elapsed time (serial): " << elapsed.count(); //0.24 for cache thrashing version
+
+    delete[] blurredImage;
+}
+
+
+void blurParallel(char* image, unsigned int pixelOffset, unsigned int imageWidth, unsigned int imageHeight)
+{
+    //OpenMP brings very small speedup, almost insignificant
+
+    auto start = std::chrono::high_resolution_clock::now();
+
+    int split = (blurRadius - 1) / 2;
+    unsigned int imageSize = imageWidth * imageHeight;
+    pixel* blurredImage = new pixel[imageSize];
+
+    #pragma omp parallel for
+    for(int y = 0; y < imageHeight; y++)
+        horizontalBlur(blurredImage, image, pixelOffset, imageWidth, imageHeight, y, y+1, blurRadius, split);
+
+    #pragma omp parallel for
+    for(int y = 0; y < imageHeight; y++)
+        verticalBlur(blurredImage, image, pixelOffset, imageWidth, imageHeight, y, y+1, blurRadius, split);
+
+
+    auto stop = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> elapsed = stop - start;
+
+    std::cout << "elapsed time (parallel): " << elapsed.count(); //0.24 for cache thrashing version
+
+
+    int totalSize = imageSize * 3;
+    memcpy(image + pixelOffset, blurredImage, totalSize);
+    std::ofstream outputFile("blurred.bmp", std::ios::out | std::ios::binary);
+    outputFile.write(image, (std::streamsize)totalSize + sizeof(headers));
+    outputFile.close();
+
 }
 
 int main()
@@ -199,7 +269,8 @@ int main()
     unsigned int imageSize = imageWidth * imageHeight;
 
 
-    blur(image, pixelOffset, imageWidth, imageHeight);
+    //blurParallel(image, pixelOffset, imageWidth, imageHeight);
+    blur(image, pixelOffset, imageWidth, imageHeight, 0, imageHeight);
     //toGrayscale(image, pixelOffset, imageSize);
     delete[] image;
 }
