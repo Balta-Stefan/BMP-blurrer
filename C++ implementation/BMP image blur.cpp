@@ -5,14 +5,18 @@
 #include <fstream>
 #include <chrono>
 #include <algorithm>
-
+#include <immintrin.h>
 
 /*
 Coordinates of the image start from the lower left corner.
 Image is read from left to right, row at a time (from the bottom)
+
+All summations of pixels use short because char will always overflow.
+None of the vector instruction sets support integer division...This means that the only allowed radiuses must be a power of 2 so that division turns into right shifting.This is not possible because 
+blur radius MUST be an odd number.
 */
 
-const unsigned int blurRadius = 15;
+const static unsigned short blurRadius = 11;
 
 #pragma pack(1)
 struct BMP_file_header
@@ -54,12 +58,16 @@ struct pixel
     unsigned char blue;
 };
 
+
+
 void toGrayscale(char* image, unsigned int dataOffset, unsigned int size)
 {
     pixel* grayscale = new pixel[size];
+    char* pixelData = image + dataOffset;
+
     for (unsigned int i = 0; i < size; i++)
     {
-        pixel currentPixel = *((pixel*)(image + dataOffset + 3 * i));
+        pixel currentPixel = *((pixel*)(pixelData + 3 * i));
         char average = ((int)currentPixel.red + currentPixel.green + currentPixel.blue) / 3;
         currentPixel.red = average;
         currentPixel.green = average;
@@ -68,20 +76,16 @@ void toGrayscale(char* image, unsigned int dataOffset, unsigned int size)
     }
 
     int totalSize = size * 3;
-    memcpy(image + dataOffset, grayscale, totalSize);
+    memcpy(pixelData, grayscale, totalSize);
     std::ofstream outputFile("grayscaled.bmp", std::ios::out | std::ios::binary);
     outputFile.write(image, totalSize+sizeof(headers));
     outputFile.close();
     delete[] grayscale;
 }
 
-void blurAVX(char* image, unsigned int pixelOffset, unsigned int imageWidth, unsigned int imageHeight)
-{
-
-}
 
 
-void horizontalBlur(pixel* blurredImage, char* image, unsigned int pixelOffset, unsigned int imageWidth, unsigned int imageHeight, unsigned int startRow, unsigned int endRow, unsigned int radius, unsigned int split)
+void horizontalBlur(pixel* blurredImage, char* pixelData, unsigned int imageWidth, unsigned int imageHeight, unsigned int startRow, unsigned int endRow, unsigned int split)
 {
     for (unsigned int y = startRow; y < endRow; y++)
     {
@@ -92,31 +96,31 @@ void horizontalBlur(pixel* blurredImage, char* image, unsigned int pixelOffset, 
             unsigned int leftEdge = std::max((unsigned int)0, x - split);
             unsigned int rightEdge = std::min(imageWidth - 1, x + split);
 
-            int redAccumulator = 0;
-            int greenAccumulator = 0;
-            int blueAccumulator = 0;
-            for (int i = leftEdge; i <= rightEdge; i++)
+            unsigned short redAccumulator = 0;
+            unsigned short greenAccumulator = 0;
+            unsigned short blueAccumulator = 0;
+            for (unsigned int i = leftEdge; i <= rightEdge; i++)
             {
-                redAccumulator += ((pixel*)(image + pixelOffset + 3 * (y * imageWidth + i)))->red;
-                greenAccumulator += ((pixel*)(image + pixelOffset + 3 * (y * imageWidth + i)))->green;
-                blueAccumulator += ((pixel*)(image + pixelOffset + 3 * (y * imageWidth + i)))->blue;
+                redAccumulator += ((pixel*)(pixelData + 3 * (y * imageWidth + i)))->red;
+                greenAccumulator += ((pixel*)(pixelData + 3 * (y * imageWidth + i)))->green;
+                blueAccumulator += ((pixel*)(pixelData + 3 * (y * imageWidth + i)))->blue;
             }
-            newPixel.red = redAccumulator / radius;
-            newPixel.green = greenAccumulator / radius;
-            newPixel.blue = blueAccumulator / radius;
+            newPixel.red = redAccumulator / blurRadius;
+            newPixel.green = greenAccumulator / blurRadius;
+            newPixel.blue = blueAccumulator / blurRadius;
 
             blurredImage[y * imageWidth + x] = newPixel;
         }
     }
 }
 
-void verticalBlur(pixel* blurredImage, char* image, unsigned int pixelOffset, unsigned int imageWidth, unsigned int imageHeight, unsigned int startRow, unsigned int endRow, unsigned int radius, unsigned int split)
+void verticalBlur(pixel* blurredImage, char* image, unsigned int imageWidth, unsigned int imageHeight, unsigned int startRow, unsigned int endRow, unsigned int startColumn, unsigned int endColumn, unsigned int split)
 {
-    int* rowAccumulator = new int[imageWidth * 3];
+    unsigned short* rowAccumulator = new unsigned short[imageWidth * 3];
     for (unsigned int y = startRow; y < endRow; y++)
     {
         //zero out the accumulator
-        std::memset(rowAccumulator, 0, imageWidth * sizeof(int) * 3);
+        std::memset(rowAccumulator, 0, imageWidth * sizeof(unsigned short) * 3);
 
         unsigned int upperEdge = std::max((unsigned int)0, y - split);
         unsigned int lowerEdge = std::min(imageHeight - 1, y + split);
@@ -131,15 +135,15 @@ void verticalBlur(pixel* blurredImage, char* image, unsigned int pixelOffset, un
             }
         }
 
-        for (unsigned int x = 0; x < imageWidth; x++)
+        for (unsigned int x = startColumn; x < endColumn; x++)
         {
-            rowAccumulator[3 * x] /= radius;
-            rowAccumulator[3 * x + 1] /= radius;
-            rowAccumulator[3 * x + 2] /= radius;
+            rowAccumulator[3 * x] /= blurRadius;
+            rowAccumulator[3 * x + 1] /= blurRadius;
+            rowAccumulator[3 * x + 2] /= blurRadius;
 
-            image[pixelOffset + 3 * (y * imageWidth + x)] = rowAccumulator[3 * x];
-            image[pixelOffset + 3 * (y * imageWidth + x) + 1] = rowAccumulator[3 * x + 1];
-            image[pixelOffset + 3 * (y * imageWidth + x) + 2] = rowAccumulator[3 * x + 2];
+            image[3 * (y * imageWidth + x)] = rowAccumulator[3 * x];
+            image[3 * (y * imageWidth + x) + 1] = rowAccumulator[3 * x + 1];
+            image[3 * (y * imageWidth + x) + 2] = rowAccumulator[3 * x + 2];
         }
     }
     delete[] rowAccumulator;
@@ -166,8 +170,8 @@ void blur(char* image, unsigned int pixelOffset, unsigned int imageWidth, unsign
     unsigned int imageSize = imageWidth * imageHeight;
     pixel* blurredImage = new pixel[imageSize];
 
-    horizontalBlur(blurredImage, image, pixelOffset, imageWidth, imageHeight, startRow, endRow, blurRadius, split);
-    verticalBlur(blurredImage, image, pixelOffset, imageWidth, imageHeight, startRow, endRow, blurRadius, split);
+    horizontalBlur(blurredImage, image+pixelOffset, imageWidth, imageHeight, startRow, endRow, split);
+    verticalBlur(blurredImage, image + pixelOffset, imageWidth, imageHeight, startRow, endRow, 0, imageWidth, split);
 
     int totalSize = imageSize * 3;
     memcpy(image + pixelOffset, blurredImage, totalSize);
@@ -204,11 +208,11 @@ void blurParallel(char* image, unsigned int pixelOffset, unsigned int imageWidth
 
     #pragma omp parallel for
     for(int y = 0; y < imageHeight; y++)
-        horizontalBlur(blurredImage, image, pixelOffset, imageWidth, imageHeight, y, y+1, blurRadius, split);
+        horizontalBlur(blurredImage, image + pixelOffset, imageWidth, imageHeight, y, y+1, split);
 
     #pragma omp parallel for
     for(int y = 0; y < imageHeight; y++)
-        verticalBlur(blurredImage, image, pixelOffset, imageWidth, imageHeight, y, y+1, blurRadius, split);
+        verticalBlur(blurredImage, image + pixelOffset, imageWidth, imageHeight, y, y+1, 0, imageWidth, split);
 
 
     auto stop = std::chrono::high_resolution_clock::now();
@@ -225,8 +229,155 @@ void blurParallel(char* image, unsigned int pixelOffset, unsigned int imageWidth
 
 }
 
+void nullifyAVXregisters(__m256i registers[], unsigned int count)
+{
+    for (unsigned int i = 0; i < count; i++)
+        registers[i] = _mm256_setzero_si256();
+}
+
+void blurVerticalAVX(pixel* blurredImage, char* image, unsigned int imageWidth, unsigned int imageHeight, unsigned int startRow, unsigned int endRow, unsigned int radius, unsigned int split)
+{
+    //_mm_cvtsi32_si128 - Copy 32-bit integer a to the lower elements of dst, and zero the upper elements of dst.
+    //256 bit register can hold 16 2-byte components.Pixel values have to be converted to shorts first.
+    //The idea: load 16 components into a 128 bit register, and then zero expand it to 256 bits.This will effectively convert 16 chars to 16 shorts.
+    
+    //this is called after horizontal blur.Data is taken from blurredImage and stored into image.
+
+    //__m128i _mm_load_si128 (__m128i const* mem_addr) - load 128 bits of integer data.Memory must be aligned at a 16 byte boundary.
+
+    //__m256i _mm256_cvtepu8_epi16 (__m128i a) - zero extend chars to shorts
+
+    unsigned short availableRegisters = 8; //there are 16 registers in total.8 of them will be used as accumulators, other 8 will receive new values
+
+    unsigned int numOfReads = imageWidth / 16; //how many times a row can be read using 128-bit register.16 8-bit pixel components can fit into a 128-bit register.Leftovers will be handled manually
+    unsigned short* leftoverAccumulator = nullptr;
+    if (imageWidth % 16 != 0)
+        leftoverAccumulator = new unsigned short[imageWidth - 16 * numOfReads];
+
+    __m256i accumulators[8];
+    __m256i _radius = _mm256_set1_epi16(radius);
+
+    unsigned short* scratchArea = (unsigned short*)_aligned_malloc(16*sizeof(unsigned short), 32); //results from avx registers will be moved in here
+    
+
+
+
+    for (unsigned int y = startRow; y < endRow; y++)
+    {
+        unsigned int upperEdge = std::max((unsigned int)0, y - split);
+        unsigned int lowerEdge = std::min(imageHeight - 1, y + split);
+        /*
+            Read from upperEdge to the lowerEdge by 8 registers per row.
+            Once that is complete, perform the same for the rest of the rows.
+        */
+        for (int avxChunk = 0; avxChunk < numOfReads; avxChunk++)
+        {
+            //zero out the accumulators
+            nullifyAVXregisters(accumulators, 8);
+            for (unsigned int i = upperEdge; i <= lowerEdge; i++)
+            {
+                //load the entire chunk of 8*128 bits (thats 8 registers * 16 pixel components = 128 pixel components per vertical scan)
+                for (unsigned short i = 0; i < availableRegisters; i++)
+                {
+                    //This basically loads 16 pixel components into temp register.After that, it is zero expanded into shorts(which requires a 256 - bit register)
+                    __m128i temp128 = _mm_load_si128((__m128i*)(blurredImage + y*imageWidth + avxChunk*16 + i*16)); //PROBLEM: this might be wrong.
+                    __m256i temp256 = _mm256_cvtepu8_epi16(temp128);//convert chars to shorts
+
+                    //add to accumulator
+                    accumulators[i] = _mm256_add_epi16(accumulators[i], temp256);
+                }
+            }
+
+            //divide the values in accumulators by the radius value.This will be performed manually because there are no integer division AVX instructions
+            for (int i = 0; i < availableRegisters; i++)
+            {
+                _mm256_store_si256((__m256i*)scratchArea, accumulators[i]);
+                for (unsigned int i = 0; i < 16; i++)
+                {
+                    //extract 16 shorts
+                    image[3 * y * imageWidth + avxChunk*16 + i*16 + i] = (unsigned char)(scratchArea[i] / blurRadius);
+                }
+                // 1  2  3  4  5  6  7  8  9  10  11  12  13  14  15  16 (register 255-0)
+                //->_mm256_store_si256
+                //16  15  14  13  12  11  10  9  8  7  6  5  4  3  2  1 (memory+255 - memory+0)
+            }
+        }
+    }
+
+    _aligned_free(scratchArea);
+
+    //blur the leftovers manually
+    if (leftoverAccumulator != nullptr)
+    {
+        char* tempImage = (char*)blurredImage;
+        for (unsigned int row = startRow; row < endRow; row++)
+        {
+            memset(leftoverAccumulator, 0, imageWidth - 16 * numOfReads);
+
+            unsigned int upperEdge = std::max((unsigned int)0, row - split);
+            unsigned int lowerEdge = std::min(imageHeight - 1, row + split);
+
+            for (unsigned int y = upperEdge; y <= lowerEdge; y++)
+            {
+                for (int x = numOfReads * 16; x < imageWidth; x++)
+                {
+                    leftoverAccumulator[x] += tempImage[y * imageWidth + x];
+                }
+            }
+            //average them
+            for (unsigned int x = 0; x < imageWidth - 16 * numOfReads; x++)
+            {
+                image[3 * (row * imageWidth + x)] = leftoverAccumulator[x] / blurRadius;
+                image[3 * (row * imageWidth + x) + 1] = leftoverAccumulator[x] / blurRadius;
+                image[3 * (row * imageWidth + x) + 2] = leftoverAccumulator[x] / blurRadius;
+            }
+        }
+        delete[] leftoverAccumulator;
+    }
+}
+
+void blurAVXSerial(char* image, unsigned int pixelOffset, unsigned int imageWidth, unsigned int imageHeight)
+{
+    auto start = std::chrono::high_resolution_clock::now();
+
+    int split = (blurRadius - 1) / 2;
+    unsigned int imageSize = imageWidth * imageHeight;
+    pixel* blurredImage = new pixel[imageSize];
+
+    horizontalBlur(blurredImage, image + pixelOffset, imageWidth, imageHeight, 0, imageHeight, split);
+    blurVerticalAVX(blurredImage, image + pixelOffset, imageWidth, imageHeight, 0, imageHeight, blurRadius, split);
+
+    int totalSize = imageSize * 3;
+    memcpy(image + pixelOffset, blurredImage, totalSize);
+    std::ofstream outputFile("blurred.bmp", std::ios::out | std::ios::binary);
+    outputFile.write(image, (std::streamsize)totalSize + sizeof(headers));
+    outputFile.close();
+
+    //blur by horizontal axis first
+    //blur by vertical axis, taking into account the values gained by horizontal blurring
+
+    //optimisations: instead of using max() and min() on every step, perform calculations on the inner part of the picture that won't go out of bounds, and then
+        //perform calculations using max() and min() for the rest that can go out of bounds
+
+
+
+    auto stop = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> elapsed = stop - start;
+
+    std::cout << "elapsed time (serial): " << elapsed.count(); //0.24 for cache thrashing version
+
+    delete[] blurredImage;
+}
+
+
 int main()
 {
+    if (blurRadius % 2 == 0)
+    {
+        std::cout << "Blur radius must be an odd number!";
+        return -1;
+    }
+
     std::ifstream fileInput("test.bmp", std::ios::in | std::ios::binary);
     headers metaData;
     int a = sizeof(headers);
@@ -238,8 +389,8 @@ int main()
     int size = fileInput.tellg();
     fileInput.seekg(0);
     
-    char* image = new char[size];
-    //char* image = (char*)calloc(size, 1);
+    char* image = (char*)_aligned_malloc(size, 16); //16 byte memory alignment
+    //char* image = new char[size];
 
     if (!fileInput.read(image, size))
     {
@@ -268,9 +419,14 @@ int main()
     unsigned int imageHeight = metaData.infoHeader.height;
     unsigned int imageSize = imageWidth * imageHeight;
 
+    //AVX - 0.04
+    //Parallel - 0.02
+    //serial - 0.035
 
+    blurAVXSerial(image, pixelOffset, imageWidth, imageHeight);
     //blurParallel(image, pixelOffset, imageWidth, imageHeight);
-    blur(image, pixelOffset, imageWidth, imageHeight, 0, imageHeight);
+    //blur(image, pixelOffset, imageWidth, imageHeight, 0, imageHeight);
     //toGrayscale(image, pixelOffset, imageSize);
-    delete[] image;
+    //delete[] image;
+    _aligned_free(image);
 }
