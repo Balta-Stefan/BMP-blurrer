@@ -324,8 +324,10 @@ void blurVerticalAVX(pixel* blurredImage, char* image, unsigned int imageWidth, 
 
     _aligned_free(unloadArea);
 
+    //THIS HASN'T BEEN TESTED YET!!!
+
     //blur the leftovers manually
-    /*if (leftoverAccumulator != nullptr)
+    if (leftoverAccumulator != nullptr)
     {
         char* tempImage = (char*)blurredImage;
         for (unsigned int row = startRow; row < endRow; row++)
@@ -351,7 +353,7 @@ void blurVerticalAVX(pixel* blurredImage, char* image, unsigned int imageWidth, 
             }
         }
         delete[] leftoverAccumulator;
-    }*/
+    }
 }
 
 void blurAVX(char* image, unsigned int pixelOffset, unsigned int imageWidth, unsigned int imageHeight, bool serial)
@@ -403,13 +405,15 @@ void blurAVX(char* image, unsigned int pixelOffset, unsigned int imageWidth, uns
 
 int main()
 {
+    std::cout << "Leftover blurring in AVX blur hasn't been tested!!!" << std::endl;
+
     if (blurRadius % 2 == 0)
     {
         std::cout << "Blur radius must be an odd number!";
         return -1;
     }
 
-    std::ifstream fileInput("newOne.bmp", std::ios::in | std::ios::binary);
+    std::ifstream fileInput("fullHD.bmp", std::ios::in | std::ios::binary);
     headers metaData;
     int a = sizeof(headers);
     if (!fileInput)
