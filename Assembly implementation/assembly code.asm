@@ -6,24 +6,24 @@
 
 extern output_to_file ; writes blurred image to a file.Written in C - to do
 
-segment data 
-	blur_radius ; 2 byte value enter this manually
-	split ; 2 byte value.This value is equal to (blur_radius-1)/2.Enter this manually
+SECTION .data 
+	DW blur_radius ; 2 byte value enter this manually
+	DW split ; 2 byte value.This value is equal to (blur_radius-1)/2.Enter this manually
 	
-	BMP_magic_number ; equals 19778
-	unsuccessful_image_load "Image can't be loaded"
-	invalid_magic_number "Invalid magic number"
+	DW BMP_magic_number 19778 ; equals 19778
+	DB unsuccessful_image_load "Image can't be loaded"
+	DB invalid_magic_number "Invalid magic number"
 
-segment bss
-	image_pointer ; 64-bits 
-	pixel_offset ; 64-bits.The address of the first pixel.
-	image_width ; integer 
-	image_height ; integer 
+SECTION .bss
+	DQ image_pointer ; 64-bits 
+	DQ first_pixel_address ; 64-bits.The address of the first pixel.
+	DD image_width ; integer 
+	DD image_height ; integer 
 	
-	temporary_image_ptr ; pointer to the new image
+	DQ temporary_image_ptr ; pointer to the new image
 	
-segment text 
-
+SECTION .text 
+global _start
 
 
 _printErrorMessage:
@@ -53,7 +53,7 @@ _start:
 	
 	; check for consistency of header image dimensions - to do
 	
-	; find pixel_offset, image_width, image_height - to do 
+	; find first_pixel_address, image_width, image_height - to do 
 		
 	call _blur_serial
 	
@@ -80,10 +80,11 @@ _horizontal_blur_serial:
 	; r8d - leftEdge 
 	; r9d - rightEdge
 		
-	; r11d - number three.Used in multiplication inside .blur_loop	
-	mov r11d, 3
+	; r15d - number three.Used in multiplication inside .blur_loop	
+	mov r15d, 3
 		
-
+	; div instruction: EDX:EAX contain the dividend, EDX must sit unused (and zeroed out)
+	xor RDX, RDX
 	
 	; [row counter] loop from 0 to image_height 
 	.rowLoop:
@@ -106,26 +107,57 @@ _horizontal_blur_serial:
 						imul r10d, r11d 
 						
 						; r11d now contains the address of the current pixel 
-						lea r11d, ; is it allowed to do [pixel_offset + r10d]?
+						lea r11d, [first_pixel_address + r10d]
 						
-						; RBX += pixelData + 3*(row*image_width+i)
-						; RSI += pixelData + 3*(row*image_width+i)+1)
-						; RDI += pixelData + 3*(row*image_width+i)+2)
+						; EBX += pixelData + 3*(row*image_width+i)
+						; ESI += pixelData + 3*(row*image_width+i)+1)
+						; EDI += pixelData + 3*(row*image_width+i)+2)
+						add EBX, [r11d]
+						add ESI, [r11d+1]
+						add EDI, [r11d+2]
+						
 						
 						; test .blur_loop 
 						inc r8d
 						cmp r8d, r9d 
 						jle .blur_loop
 				
-				; RBX /= blur_radius
-				; RSI /= blur_radius 
-				; RDI /= blur_radius 
 				
-				; newPixelIndex = row*image_width + column
-				; temporary_image_ptr[newPixelIndex+0] = RBX
-				; temporary_image_ptr[newPixelIndex+1] = RSI
-				; temporary_image_ptr[newPixelIndex+2] = RDI
-			
+				
+				
+				mov r11d, dword [blur_radius]
+				; EBX /= blur_radius
+				mov EAX, EBX
+				div r11d
+				mov EBX, EAX
+				
+				; ESI /= blur_radius 
+				mov EAX, ESI
+				div r11d
+				mov ESI, EAX
+				
+				; EDI /= blur_radius 
+				mov EAX, EDI
+				div r11d
+				mov EDI, EAX
+				
+				; r11d = newPixelIndex = 3*row*image_width + column
+				mov r11d, [image_width]
+				imul r11d, ECX 
+				imul r11d, r15d
+				add r11d, EDI 
+				
+				; address of the current pixel in the new picture
+				lea r12, [temporary_image_ptr + r11d]
+				
+				; temporary_image_ptr[newPixelIndex+0] = BL (RBX[0-7])
+				mov [r12], BL
+				; temporary_image_ptr[newPixelIndex+1] = SIL (RSI[0-7])
+				inc r12
+				mov [r12], SIL
+				; temporary_image_ptr[newPixelIndex+2] = DIL (RDI[0-7])
+				inc r12
+				mov [r12], DIL
 			
 				; check columnLoop status
 				inc RDI 
