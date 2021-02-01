@@ -4,6 +4,15 @@
 ; TO DO:
 ; allow the user to pass blur radius as argument.The program has to check if the value is odd or even (it must be odd).
 
+
+
+; register r15d holds image_width
+; register r14d holds image_height 
+; register r13 is holding the address of the beginning of the picture pixels.
+; register r12w is holding the variable blur_radius 
+; register r11w is holding the variable split (split = (blur_radius-1)/2)
+
+
 extern output_to_file ; writes blurred image to a file.Written in C - to do
 
 SECTION .data 
@@ -17,8 +26,8 @@ SECTION .data
 SECTION .bss
 	DQ image_pointer ; 64-bits 
 	DQ first_pixel_address ; 64-bits.The address of the first pixel.
-	DW image_width ; short 
-	DW image_height ; short 
+	DW image_width ; short.Will be kept in register r15d.
+	DW image_height ; short.Will be kept in register r14d.
 	
 	DQ temporary_image_ptr ; pointer to the new image
 	
@@ -48,13 +57,31 @@ _start:
 	; pass invalid_magic_number as argument - to do
 	jne _printErrorMessage
 	
+	
+	; find first_pixel_address, image_width, image_height - to do 
+	lea [first_pixel_address], qword [image_pointer + 10]
+	mov r13, [first_pixel_address]
+	lea RAX, [image_pointer + 18]
+	mov [image_width], [RAX]
+	mov [image_height], [RAX+4] ; this might not be allowed.If it isn't, image_height is at the address image_pointer + 22
+	
 	; check if bits per pixel in the header equals 24 - to do
 	
 	
 	; check for consistency of header image dimensions - to do
 	
-	; find first_pixel_address, image_width, image_height - to do 
-		
+	
+	; since image_width and image_height will be used often, they will be loaded into registers 
+	mov r15d, [image_width]
+	mov r14d, [image_height]
+	
+	; blur_radius and split are also used very often
+	xor r11d, r11d
+	xor r12d, r12d
+	
+	mov r12w, word [blur_radius]
+	mov r11w, word [split]
+
 	call _blur_serial
 	
 	; blur operation done
@@ -70,22 +97,31 @@ _blur_serial:
 	
 	
 _horizontal_blur_serial:
-	; row counter - ECX 
-	; column counter - EDI
+	; variables: 
+		; row counter (y) -> EAX 
+		; column counter (x) -> EBX 
+		; leftEdge -> ECX
+		; rightEdge -> ESI
+		; 3 16-bit accumulators for pixel components
+			; r10d - red 
+			; r9d - green 
+			; r8d - blue
+		; blur loop counter (i) - ECX
+		; value of 3*(y*imageWidth+i) - EDI
+		
+		
+	push RBP 
+	mov RBP, [temporary_image_ptr]
+		
+
+	; row counter - EAX 
+	; column counter - EBX
 	
 	; zero out the loop counters
-	xor RCX, RCX 
-	xor RDI, RDI
-	
-	; r8d - leftEdge 
-	; r9d - rightEdge
+	xor RAX, RAX 
+	xor RBX, RBX
+
 		
-	; r15d - number three.Used in multiplication inside .blur_loop	
-	mov r15d, 3
-	; r14 - image_width 
-	mov r14d, [image_width]
-	; r13 - image_height 
-	mov r13d, [image_height]
 		
 	; div instruction: EDX:EAX contain the dividend, EDX must sit unused (and zeroed out)
 	xor RDX, RDX
@@ -97,17 +133,17 @@ _horizontal_blur_serial:
 				call .calculate_edges
 				
 				; zero out accumulators on every radius iteration
-				xor RBX, RBX ; red accumulator - RBX
-				xor RSI, RSI ; green accumulator - RSI
-				xor RDI, RDI ; blue accumulator - RDI
+				xor r10d, r10d ; red accumulator - r10d
+				xor r9d, r9d ; green accumulator - r9d
+				xor r8d, r8d ; blue accumulator - r8d
 				
 				; [i counter] - loop from leftEdge to rightEdge (inclusive)
 				.blur_loop:
 						; 3*(row*image_width+i)
-						mov r10d, ECX ; r10d now contains .rowLoop counter
-						imul r10d, r14d ; multiply by image_width
-						add r10d, r8d ; add .blur_loop counter
-						imul r10d, r15d ; multiply by 3
+						mov EDI, EAX
+						imul EDI, r15d
+						add EDI, ECX
+						imul EDI, EDI, 3
 						
 						; r11 now contains the address of the current pixel 
 						lea r11, [first_pixel_address + r10d]
@@ -121,8 +157,8 @@ _horizontal_blur_serial:
 						
 						
 						; test .blur_loop 
-						inc r8d
-						cmp r8d, r9d 
+						inc ECX
+						cmp ECX, ESI 
 						jle .blur_loop
 				
 				
@@ -168,33 +204,33 @@ _horizontal_blur_serial:
 				jb .columnLoop
 			
 		; check rowLoop status
-		inc RCX
-		cmp RCX, r13d ; comare with image_height
+		inc ECX
+		cmp ECX, r14d ; compare with image_height
 		jb .rowLoop
 		
 	; done
+	pop RBP
+	
 	ret 
 	
 	; PROBLEM!!!CMOVS might not be used correctly
 	.calculate_edges:
 		; leftEdge = max(0, (signed short)columnLoop - (signed short)split);
 		
-		mov r8d, EDI
-		sub r8d, word [split]
-		cmp r8d, 0
-		cmovs r8d, 0; conditional move that happens if r8 - split is < 0
+
+		sub EDI, r11
+		cmp EDI, 0
+		cmovs ECX, 0
 		
 		; image_width - 1
-		mov r9d, r14d
-		dec r9d
+		lea r10d, [r15d-1]
 		
 		; column counter + split
-		mov r10d, EDI
-		add r10d, word [split]
+		lea ESI, [EBX + r11d]
 		
 		; rightEdge = min(image_width - 1, column_counter + split);
-		cmp r10d, r9d
-		cmovs r9d, r10d; if column_counter + split is less than image_width - 1
+		cmp r10d, ESI
+		cmovs ESI, r10d; if image_width - 1 is less than column_counter + split, move r10d to ESI (right edge)
 		
 		ret 
 	
