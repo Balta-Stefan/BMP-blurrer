@@ -7,8 +7,8 @@
 extern output_to_file ; writes blurred image to a file.Written in C - to do
 
 segment data 
-	blur_radius ; enter this manually
-	split ; integer.This value is equal to (blur_radius-1)/2.Enter this manually
+	blur_radius ; 2 byte value enter this manually
+	split ; 2 byte value.This value is equal to (blur_radius-1)/2.Enter this manually
 	
 	BMP_magic_number ; equals 19778
 	unsuccessful_image_load "Image can't be loaded"
@@ -16,7 +16,7 @@ segment data
 
 segment bss
 	image_pointer ; 64-bits 
-	pixel_offset ; integer
+	pixel_offset ; 64-bits.The address of the first pixel.
 	image_width ; integer 
 	image_height ; integer 
 	
@@ -70,34 +70,97 @@ _blur_serial:
 	
 	
 _horizontal_blur_serial:
-	; row counter - RCX 
-	; column counter - RDI
+	; row counter - ECX 
+	; column counter - EDI
+	
+	; zero out the loop counters
+	xor RCX, RCX 
+	xor RDI, RDI
+	
+	; r8d - leftEdge 
+	; r9d - rightEdge
+		
+	; r11d - number three.Used in multiplication inside .blur_loop	
+	mov r11d, 3
+		
+
 	
 	; [row counter] loop from 0 to image_height 
+	.rowLoop:
 		; [column counter] loop from 0 to image_width
-			; leftEdge = max(0, (signed int)x - (signed int)split);
-	        ; rightEdge = min(imageWidth - 1, x + split);
+			.columnLoop:
+				call .calculate_edges
+				
+				; zero out accumulators on every radius iteration
+				xor RBX, RBX ; red accumulator - RBX
+				xor RSI, RSI ; green accumulator - RSI
+				xor RDI, RDI ; blue accumulator - RDI
+				
+				; [i counter] - loop from leftEdge to rightEdge (inclusive)
+				.blur_loop:
+						; 3*(row*image_width+i)
+						mov r10d, ECX ; r10d now contains .rowLoop counter
+						mov r11d, [image_width]
+						imul r10d, r11d
+						add r10d, r8d ; r10d now contains .blur_loop counter
+						imul r10d, r11d 
+						
+						; r11d now contains the address of the current pixel 
+						lea r11d, ; is it allowed to do [pixel_offset + r10d]?
+						
+						; RBX += pixelData + 3*(row*image_width+i)
+						; RSI += pixelData + 3*(row*image_width+i)+1)
+						; RDI += pixelData + 3*(row*image_width+i)+2)
+						
+						; test .blur_loop 
+						inc r8d
+						cmp r8d, r9d 
+						jle .blur_loop
+				
+				; RBX /= blur_radius
+				; RSI /= blur_radius 
+				; RDI /= blur_radius 
+				
+				; newPixelIndex = row*image_width + column
+				; temporary_image_ptr[newPixelIndex+0] = RBX
+				; temporary_image_ptr[newPixelIndex+1] = RSI
+				; temporary_image_ptr[newPixelIndex+2] = RDI
 			
-			; zero out accumulators on every radius iteration
-			; red accumulator - RBX
-			; green accumulator - RSI
-			; blue accumulator - RDI
 			
-			; [i counter] - loop from leftEdge to rightEdge (inclusive)
-				; RBX += pixelData + 3*(row*image_width+i)
-				; RSI += pixelData + 3*(row*image_width+i+1)
-				; RDI += pixelData + 3*(row*image_width+i+2)
+				; check columnLoop status
+				inc RDI 
+				cmp RDI, [image_width]
+				jb .columnLoop
 			
-			; RBX /= blur_radius
-			; RSI /= blur_radius 
-			; RDI /= blur_radius 
-			
-			; newPixelIndex = row*image_width + column
-			; temporary_image_ptr[newPixelIndex+0] = RBX
-			; temporary_image_ptr[newPixelIndex+1] = RSI
-			; temporary_image_ptr[newPixelIndex+2] = RDI
-	
+		; check rowLoop status
+		inc RCX
+		cmp RCX, [image_height]
+		jb .rowLoop
+		
 	; done
+	ret 
+	
+	; PROBLEM!!!CMOVS might not be used correctly
+	.calculate_edges:
+		; leftEdge = max(0, (signed short)columnLoop - (signed short)split);
+		
+		mov r8, RDI
+		cmp r8, [split]
+		cmovs r8d, 0; conditional move that happens if r9 - split is < 0
+		
+		; image_width - 1
+		mov r9, image_width
+		dec r9
+		
+		; column counter + split
+		mov r10, RDI
+		add r10, split 
+		
+		; rightEdge = min(image_width - 1, column_counter + split);
+		cmp r10d, r9d
+		cmovs r9d, r10d; if column_counter + split is less than image_width - 1
+		
+		ret 
 	
 _vertical_blur_serial:
 	; in order to better use the cache, whole rows will be scanned
