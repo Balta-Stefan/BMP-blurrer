@@ -98,18 +98,19 @@ _blur_serial:
 	
 _horizontal_blur_serial:
 	; variables: 
-		; row counter (y) -> EAX 
+		; row counter (y) -> ESP 
 		; column counter (x) -> EBX 
 		; leftEdge -> ECX
 		; rightEdge -> ESI
 		; 3 16-bit accumulators for pixel components
-			; r10d - red 
-			; r9d - green 
-			; r8d - blue
+			; r10w - red 
+			; r9w - green 
+			; r8w - blue
 		; blur loop counter (i) - ECX
 		; value of 3*(y*imageWidth+i) - EDI
+		; for division - RAX - only it can be used for division
 		
-		
+	push RSP 
 	push RBP 
 	mov RBP, [temporary_image_ptr]
 		
@@ -118,7 +119,7 @@ _horizontal_blur_serial:
 	; column counter - EBX
 	
 	; zero out the loop counters
-	xor RAX, RAX 
+	xor ESP, ESP 
 	xor RBX, RBX
 
 		
@@ -140,63 +141,62 @@ _horizontal_blur_serial:
 				; [i counter] - loop from leftEdge to rightEdge (inclusive)
 				.blur_loop:
 						; 3*(row*image_width+i)
-						mov EDI, EAX
+						mov RDI, ESP
 						imul EDI, r15d
 						add EDI, ECX
 						imul EDI, EDI, 3
 						
-						; r11 now contains the address of the current pixel 
-						lea r11, [first_pixel_address + r10d]
+						; EDI now contains the address of the current pixel 
+						lea RDI, [r13 + RDI]
 						
-						; EBX += pixelData + 3*(row*image_width+i)
-						; ESI += pixelData + 3*(row*image_width+i)+1)
-						; EDI += pixelData + 3*(row*image_width+i)+2)
-						add EBX, [r11]
-						add ESI, [r11+1]
-						add EDI, [r11+2]
-						
+						; red += pixelData + 3*(row*image_width+i)
+						; green += pixelData + 3*(row*image_width+i)+1)
+						; blue += pixelData + 3*(row*image_width+i)+2)
+						add r10w, word [RDI]
+						add r9w, word [RDI+1]
+						add r8w, word [RDI+2]
 						
 						; test .blur_loop 
 						inc ECX
 						cmp ECX, ESI 
 						jle .blur_loop
 				
+				; red /= blur_radius
+				mov EAX, r10d
+				div r12d
+				mov r10d, EAX
+				
+				; green /= blur_radius 
+				mov EAX, r9d
+				div r12d
+				mov r9d, EAX
+				
+				; blue /= blur_radius 
+				mov EAX, r8d
+				div r12d
+				mov r8d, EAX
 				
 				
+				mov EAX, ESP
+				imul EAX, r15d 
+				add EAX, EBX ; EAX now holds y*imageWidth + x
 				
-				mov r11d, dword [blur_radius]
-				; EBX /= blur_radius
-				mov EAX, EBX
-				div r11d
-				mov EBX, EAX
 				
-				; ESI /= blur_radius 
-				mov EAX, ESI
-				div r11d
-				mov ESI, EAX
-				
-				; EDI /= blur_radius 
-				mov EAX, EDI
-				div r11d
-				mov EDI, EAX
-				
-				; r11d = newPixelIndex = 3*row*image_width + column
-				mov r11d, r14d
-				imul r11d, ECX 
-				imul r11d, r15d
-				add r11d, EDI 
-				
+				mov RDX, [temporary_image_ptr]
 				; address of the current pixel in the new picture
-				lea r12, [temporary_image_ptr + r11d]
+				add RDX, r11d
 				
-				; temporary_image_ptr[newPixelIndex+0] = BL (RBX[0-7])
-				mov [r12], BL
-				; temporary_image_ptr[newPixelIndex+1] = SIL (RSI[0-7])
-				inc r12
-				mov [r12], SIL
-				; temporary_image_ptr[newPixelIndex+2] = DIL (RDI[0-7])
-				inc r12
-				mov [r12], DIL
+				mov [RDX], r10b ; store back new value of red component
+				
+				inc RDX
+				mov [RDX], r9b ; store back new value of green component
+				
+				inc RDX
+				mov [RDX], r8b ; store back new value of blue component
+				
+				xor RDX, RDX ; zero out because of division in the next iteration
+				
+
 			
 				; check columnLoop status
 				inc RDI 
@@ -204,12 +204,13 @@ _horizontal_blur_serial:
 				jb .columnLoop
 			
 		; check rowLoop status
-		inc ECX
-		cmp ECX, r14d ; compare with image_height
+		inc ESP
+		cmp ESP, r14d ; compare with image_height
 		jb .rowLoop
 		
 	; done
 	pop RBP
+	pop RSP
 	
 	ret 
 	
