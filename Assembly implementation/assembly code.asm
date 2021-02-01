@@ -17,8 +17,8 @@ SECTION .data
 SECTION .bss
 	DQ image_pointer ; 64-bits 
 	DQ first_pixel_address ; 64-bits.The address of the first pixel.
-	DD image_width ; integer 
-	DD image_height ; integer 
+	DW image_width ; short 
+	DW image_height ; short 
 	
 	DQ temporary_image_ptr ; pointer to the new image
 	
@@ -82,6 +82,10 @@ _horizontal_blur_serial:
 		
 	; r15d - number three.Used in multiplication inside .blur_loop	
 	mov r15d, 3
+	; r14 - image_width 
+	mov r14d, [image_width]
+	; r13 - image_height 
+	mov r13d, [image_height]
 		
 	; div instruction: EDX:EAX contain the dividend, EDX must sit unused (and zeroed out)
 	xor RDX, RDX
@@ -101,20 +105,19 @@ _horizontal_blur_serial:
 				.blur_loop:
 						; 3*(row*image_width+i)
 						mov r10d, ECX ; r10d now contains .rowLoop counter
-						mov r11d, [image_width]
-						imul r10d, r11d
-						add r10d, r8d ; r10d now contains .blur_loop counter
-						imul r10d, r11d 
+						imul r10d, r14d ; multiply by image_width
+						add r10d, r8d ; add .blur_loop counter
+						imul r10d, r15d ; multiply by 3
 						
-						; r11d now contains the address of the current pixel 
-						lea r11d, [first_pixel_address + r10d]
+						; r11 now contains the address of the current pixel 
+						lea r11, [first_pixel_address + r10d]
 						
 						; EBX += pixelData + 3*(row*image_width+i)
 						; ESI += pixelData + 3*(row*image_width+i)+1)
 						; EDI += pixelData + 3*(row*image_width+i)+2)
-						add EBX, [r11d]
-						add ESI, [r11d+1]
-						add EDI, [r11d+2]
+						add EBX, [r11]
+						add ESI, [r11+1]
+						add EDI, [r11+2]
 						
 						
 						; test .blur_loop 
@@ -142,7 +145,7 @@ _horizontal_blur_serial:
 				mov EDI, EAX
 				
 				; r11d = newPixelIndex = 3*row*image_width + column
-				mov r11d, [image_width]
+				mov r11d, r14d
 				imul r11d, ECX 
 				imul r11d, r15d
 				add r11d, EDI 
@@ -161,12 +164,12 @@ _horizontal_blur_serial:
 			
 				; check columnLoop status
 				inc RDI 
-				cmp RDI, [image_width]
+				cmp RDI, r14d ; compare with image_width
 				jb .columnLoop
 			
 		; check rowLoop status
 		inc RCX
-		cmp RCX, [image_height]
+		cmp RCX, r13d ; comare with image_height
 		jb .rowLoop
 		
 	; done
@@ -176,17 +179,18 @@ _horizontal_blur_serial:
 	.calculate_edges:
 		; leftEdge = max(0, (signed short)columnLoop - (signed short)split);
 		
-		mov r8, RDI
-		cmp r8, [split]
-		cmovs r8d, 0; conditional move that happens if r9 - split is < 0
+		mov r8d, EDI
+		sub r8d, word [split]
+		cmp r8d, 0
+		cmovs r8d, 0; conditional move that happens if r8 - split is < 0
 		
 		; image_width - 1
-		mov r9, image_width
-		dec r9
+		mov r9d, r14d
+		dec r9d
 		
 		; column counter + split
-		mov r10, RDI
-		add r10, split 
+		mov r10d, EDI
+		add r10d, word [split]
 		
 		; rightEdge = min(image_width - 1, column_counter + split);
 		cmp r10d, r9d
@@ -197,18 +201,69 @@ _horizontal_blur_serial:
 _vertical_blur_serial:
 	; in order to better use the cache, whole rows will be scanned
 	
-	; row_accumulator = allocate space equal to image_width*3*sizeof(short)
+	; r15d = 3
+	mov r15d, 3
+	; r14d = image_width
+	mov r14d, [image_width]
+	; r13d = image_height
+	mov r13d, [image_height]
+	
+	; r12d = 3*image_width*sizeof(short) - since short is 2 bytes long, *2 can be done with left shift 
+	; 
+	imul r12d, r14d, 3
+	shl r12d, 1 ; multiply by 2 (sizeof(short))
+	
+	; pass argument for allocate (r12d) - to do
+	; the value in r12d will be used for zeroing out the row_accumulator
+	
+	; row_accumulator = allocate space equal to image_width*3*sizeof(short) - to do
+	mov r8, RAX ; r8 now contains the pointer to the row_accumulator
+	
+	xor RCX, RCX ; RCX - row counter
+	xor RDX, RDX ; RDX - column counter 
+	xor RSI, RSI ; RSI - i counter
 	
 	; [row counter] loop from 0 to image_height
-		; zero out the row_accumulator
-		; upperEdge = max(0, (int)row - (int)split); //PROBLEM!Only signed ints must be used here.
-        ; lowerEdge = min(image_height - 1, row + split);
-	
+	.row_loop:
+		; zero out the row_accumulator (arguments are r12d and the row_accumulator) - to do 
+		
+		call .calculate_edges
+		mov ESI, r8d
+		
 		; [i counter] loop from upperEdge to lowerEdge (inclusive)
+		.blurLoop:
 			; [column counter] loop from 0 to image_width 
+			.columnLoop:
+				; EAX will contain 3*column
+				imul EAX, EDX, 3
+				; EBX will contain i*image_width+column
+				mov EBX, ESI
+				imul EBX, r14d
+				add EBX, EDX
+				
+				; r11 contains address of row_accumulator[3*column]
+				lea r11, []
+				
 				; row_accumulator[3 * column] += temporary_image_ptr[i * image_width + column].red;
-                ; row_accumulator[3 * column + 1] += temporary_image_ptr[i * image_width + column].green;
-                ; row_accumulator[3 * column + 2] += temporary_image_ptr[i * image_width + column].blue;
+                
+				
+				; row_accumulator[3 * column + 1] += temporary_image_ptr[i * image_width + column].green;
+                inc EBX
+				inc EAX
+				
+				; row_accumulator[3 * column + 2] += temporary_image_ptr[i * image_width + column].blue;
+				inc EBX
+				inc EAX
+			
+				; test .columnLoop
+				inc EDX
+				cmp EDX, r14d
+				jl .columnLoop
+				
+			; check .blurLoop
+			inc ESI
+			cmp ESI, r9d 
+			jle .blurLoop
 
 		; [column counter] loop from 0 to image_width
 			; row_accumulator[3 * column] /= blurRadius;
@@ -220,10 +275,39 @@ _vertical_blur_serial:
             ; image[3 * (row * imageWidth + column) + 2] = row_accumulator[3 * column + 2];
 			
 			
+		; check row_loop
+		inc RCX
+		cmp RCX, [image_height]
+			
 	; free the space held by row_accumulator
 
+	; PROBLEM!!!CMOVS might not be used correctly
+	.calculate_edges:
+		; upperEdge = max(0, row - split); //PROBLEM!Only signed ints must be used here.
+        mov r8d, ECX
+		sub word [split]
+		cmp r8d, 0
+		cmovs r8d, 0 ; set r8d to 0 if row - split is less than 0
+		
+		
+		; lowerEdge = min(image_height - 1, row + split);
+		
+		; image_height - 1
+		mov r9d, r13d
+		dec r9d
+		
+		; row + split
+		mov r10d, ECX
+		add r10d, word [split]
+		
+		; rightEdge = min(image_height - 1, row + split);
+		cmp r10d, r9d
+		cmovs r9d, r10d; if row + split is less than image_height - 1
+		
+		ret 
+
+
+
 	; done
-			
-			
-			
+		
 			
