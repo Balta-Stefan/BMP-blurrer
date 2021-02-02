@@ -1,0 +1,59 @@
+; register r15d holds image_width
+; register r14d holds image_height 
+; register r13 is holding the address of the first picture pixel.
+; register r12w is holding the variable blur_radius 
+; register r11w is holding the variable split (split = (blur_radius-1)/2)
+
+
+- horizontal blur 
+; row counter (y) -> ESP 
+; column counter (x) -> EBX 
+; leftEdge -> ECX
+; blur loop counter (i) - ECX
+; rightEdge -> ESI
+; 3 16-bit accumulators for pixel components
+	; r10w - red 
+	; r9w - green 
+	; r8w - blue
+
+; value of 3*(y*imageWidth+i) - EDI
+; for division - RAX - only it can be used for division
+
+
+
+-vertical blur
+; row accumulator address -> RBP 
+; row counter -> ESP
+; column counter -> EBX 
+; upper edge -> ECX 
+; lower edge -> ESI
+; first blur loop (.blurLoop) -> ECX (also division loop counter)
+; second blur loop (.columnLoop) -> r10 
+; rowAccumulator[3*x] -> r9 
+; blurredImage[i*imageWidth + x] -> r8
+; value of the pixel from blurredImage[i*imageWidth + x + {0,1,2}] -> 
+; division loop counter -> ECX 
+; rowAccumulator[3*x] -> r9
+	; this should be intertwined with storage into image because the value is reused 
+	; image[3*(y*imageWidth+x)] -> r10
+	
+	
+	
+	
+	
+//------------------try 2------------------
+; -----horizontal blur----- ; seems to be done
+; blurred image pointer -> RBX
+; row counter (y) -> ECX
+; column counter (x) -> EDI
+; leftEdge -> ESI
+; rightEdge -> EBP
+; finalIndex -> ESP
+; 3 16-bit accumulators:
+	; red - r8d 
+	; green - r9d 
+	; blue - r10d 
+
+
+
+

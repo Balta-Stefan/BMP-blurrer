@@ -115,100 +115,88 @@ _horizontal_blur_serial:
 		
 	push RSP 
 	push RBP 
-	mov RBP, [temporary_image_ptr]
+	mov RBX, [temporary_image_ptr]
 		
 
 	; row counter - EAX 
 	; column counter - EBX
 	
-	; zero out the loop counters
-	xor ESP, ESP 
-	xor RBX, RBX
+	
 
 		
 		
 	; div instruction: EDX:EAX contain the dividend, EDX must sit unused (and zeroed out)
 	xor RDX, RDX
+	xor RSP, RSP ; used for pixel array indexing 
+	xor ECX, ECX ; row counter
 	
 	; [row counter] loop from 0 to image_height 
 	.rowLoop:
 		; [column counter] loop from 0 to image_width
 			.columnLoop:
-				call .calculate_edges
+				jmp .calculate_edges
+				.doneCalculatingEdges:
 				
 				; zero out accumulators on every radius iteration
-				xor r10d, r10d ; red accumulator - r10d
+				xor r10d, r10d ; blue accumulator - r10d
 				xor r9d, r9d ; green accumulator - r9d
-				xor r8d, r8d ; blue accumulator - r8d
+				xor r8d, r8d ; red accumulator - r8d
+				
+				; finalIndex = y + leftEdge*3
+				mov ESP, ESI
+				imul ESP, ESP, 3
+				add ESP, ECX 
 				
 				; [i counter] - loop from leftEdge to rightEdge (inclusive)
 				.blur_loop:
-						; 3*(row*image_width+i)
-						mov RDI, ESP
-						imul EDI, r15d
-						add EDI, ECX
-						imul EDI, EDI, 3
+						add r8d, [r13 + RSP] 
 						
-						; EDI now contains the address of the current pixel 
-						lea RDI, [r13 + RDI]
+						inc RSP 
+						add r9d, [r13 + RSP ]
 						
-						; red += pixelData + 3*(row*image_width+i)
-						; green += pixelData + 3*(row*image_width+i)+1)
-						; blue += pixelData + 3*(row*image_width+i)+2)
-						add r10w, word [RDI]
-						add r9w, word [RDI+1]
-						add r8w, word [RDI+2]
+						inc RSP 
+						add r10d, [r13 + RSP]
+						
+						inc RSP
 						
 						; test .blur_loop 
-						inc ECX
-						cmp ECX, ESI 
+						inc ESI
+						cmp ESI, EBP 
 						jle .blur_loop
 				
-				; red /= blur_radius
+				; average the accumulators
+				mov EAX, r8d 
+				div r12d
+				mov [RBX], r8b 
+				inc RBX
+				
+				mov EAX, r9d 
+				div r12d
+				mov [RBX], r9b
+				inc RBX
+				
 				mov EAX, r10d
-				div r12d
-				mov r10d, EAX
-				
-				; green /= blur_radius 
-				mov EAX, r9d
-				div r12d
-				mov r9d, EAX
-				
-				; blue /= blur_radius 
-				mov EAX, r8d
-				div r12d
-				mov r8d, EAX
+				div r12d 
+				mov [RBX], r10b 
+				inc RBX
 				
 				
-				mov EAX, ESP
-				imul EAX, r15d 
-				add EAX, EBX ; EAX now holds y*imageWidth + x
-				
-				
-				mov RDX, [temporary_image_ptr]
-				; address of the current pixel in the new picture
-				add RDX, r11d
-				
-				mov [RDX], r10b ; store back new value of red component
-				
-				inc RDX
-				mov [RDX], r9b ; store back new value of green component
-				
-				inc RDX
-				mov [RDX], r8b ; store back new value of blue component
-				
-				xor RDX, RDX ; zero out because of division in the next iteration
-				
-
-			
 				; check columnLoop status
-				inc RDI 
-				cmp RDI, r14d ; compare with image_width
+				inc EDI 
+				cmp EDI, r15d ; compare with image_width
 				jb .columnLoop
 			
 		; check rowLoop status
-		inc ESP
-		cmp ESP, r14d ; compare with image_height
+		; row counter += 3*imageWidth
+		add ECX, r15d 
+		add ECX, r15d 
+		add ECX, r15d 
+		
+		
+		mov EAX, r15d 
+		imul EAX, r14d
+		imul EAX, EAX, 3
+		cmp ECX,  EAX; compare with 3*image_height*image_width
 		jb .rowLoop
 		
 	; done
@@ -221,22 +209,23 @@ _horizontal_blur_serial:
 	.calculate_edges:
 		; leftEdge = max(0, (signed short)columnLoop - (signed short)split);
 		
-
-		sub EDI, r11
-		cmp EDI, 0
-		cmovs ECX, 0
+		mov SI, DI
+		sub SI, r11w
+		cmp SI, 0
+		cmovs SI, 0
 		
 		; image_width - 1
-		lea r10d, [r15d-1]
+		lea r8w, [r15w-1]
 		
 		; column counter + split
-		lea ESI, [EBX + r11d]
+		lea BP, [DI + r11w]
 		
 		; rightEdge = min(image_width - 1, column_counter + split);
-		cmp r10d, ESI
-		cmovs ESI, r10d; if image_width - 1 is less than column_counter + split, move r10d to ESI (right edge)
+		cmp BP, r8w
+		cmovs BP, r8w; if image_width - 1 is less than column_counter + split, move r10d to ESI (right edge)
 		
-		ret 
+		jmp .doneCalculatingEdges
+		; ret 
 	
 _vertical_blur_serial:
 	; in order to better use the cache, whole rows will be scanned
