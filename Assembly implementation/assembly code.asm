@@ -166,17 +166,17 @@ _horizontal_blur_serial:
 				
 				; average the accumulators
 				mov EAX, r8d 
-				div r12d
+				idiv r12d
 				mov [RBX], r8b 
 				inc RBX
 				
 				mov EAX, r9d 
-				div r12d
+				idiv r12d
 				mov [RBX], r9b
 				inc RBX
 				
 				mov EAX, r10d
-				div r12d 
+				idiv r12d 
 				mov [RBX], r10b 
 				inc RBX
 				
@@ -245,73 +245,64 @@ _vertical_blur_serial:
 			; this should be intertwined with storage into image because the value is reused 
 			; image[3*(y*imageWidth+x)] -> r10
 		
+	
+	; imageWidth * 3 is used very often, while imageWidth isn't needed
+	push RSP
 	push RBP 
-	push RSP 
+	imul EBP, r15d, 3
 	
+	xor RDX, RDX
+	xor RAX, RAX
 	
-	; allocate space for row accumulator - to do
+	; allocate space for row accumulator (put the pointer to RBX) - to do
 	
-	xor RSP, RSP
-	xor RCX, RCX
-	xor r10, r10
-	
+
 	; [row counter] loop from 0 to image_height
 	.row_loop:
-		; zero out the row_accumulator (arguments are imageWidth*2 and the row_accumulator) - to do 
+		; zero out the row_accumulator - to do 
 		
 		call .calculate_edges
-		; image height isn't necessary anymore, but its register is needed to store the value of horizontally blurred pixel
-		push r14
-		push RSP ; RSP will be used for the accumulator value (rowAccumulator[3 * x])
 		
+		; blurredImageIndex = blurredImagePixels[upperEdge * tripleWidth]
+		mov r8d, ESI 
+		imul r8d, EBP
+		mov r9, [temporary_image_ptr]
+		add r9, r8d
 		
-		; prepare blurredImage[i * imageWidth] pointer 
-		mov r8, RCX
-		imul r8, r15
-		add r8, [temporary_image_ptr]
-		; blurredImage pointer has to be set up only before the .blurLoop, all the additions within the .columnLoop will bring is to the new row for free
-		
+		mov r8, RBX ; rowAccumulatorPointer
 		; [i counter] loop from upperEdge to lowerEdge (inclusive)
 		.blurLoop:
 			; [column counter] loop from 0 to image_width 
-			mov r9, [RBP] ; this only goes from 0 to imageWidth, next loop will handle the index moving
 			.columnLoop:
-				; r14b will hold the pixel that is loaded from memory.That's why it was pushed on the stack, THERE ARE NO REGISTERS LEFT!!!
-				
-				; increment the red accumulator
-				mov r14b, [r8]
 				mov SP, [r9]
-				add SP, r14b
-				mov [r9], SP
+				mov AX, [r8]
+				add AX, SP
+				mov [r8], AX
 				
-				; increment the green acumulator
 				inc r8
 				inc r9
-				mov r14b, [r8]
-				mov SP, [r9]
-				add SP, r14b 
-				mov [r9], SP 
+				mov AX, [r8]
+				add AX, SP
+				mov [r8], AX
 				
-				; increment the blue accumulator
-				inc r8 
+				inc r8
 				inc r9
-				mov r14b, [r8]
-				mov SP, [r9]
-				add SP, r14b 
-			    mov [r9], SP 
+				mov AX, [r8]
+				add AX, SP
+			    mov [r8], AX
 				
+				inc r8
+				inc r9
 				
 				; test .columnLoop
 				inc r10d
 				cmp r10d, r15d
 				jl .columnLoop
 				
-				
-			inc r8 ; get into the next row.Now r8 holds the first pixel of the next row
-			
+							
 			; check .blurLoop
-			inc ECX
-			cmp ECX, ESI 
+			inc ESI
+			cmp ESI, EDI 
 			jle .blurLoop
 		
 		; [column counter] loop from 0 to image_width
@@ -323,28 +314,42 @@ _vertical_blur_serial:
             ; image[3 * (row * imageWidth + column) + 1] = row_accumulator[3 * column + 1];
             ; image[3 * (row * imageWidth + column) + 2] = row_accumulator[3 * column + 2];
 			
-		xor r10, r10
+		xor ESI, ESI
+		mov EDI, ECX 
+		imul EDI, EBP ; EDI = y * tripleWidth
+		lea RSP, [r13 + EDI] ; &image[tempIndex]
+		
+		; might need to zero out the second (higher) division register
 		.averagingLoop:
 			; TO DO
+			mov AX, [RBX + ESI] ; rowAccumulator[x]
+			idiv r12w
+			mov [RSP + ESI], AL ; store the rowAccumulator[x] / blurRadius into image[tempIndex+x]
+			
+			mov AX, [RBX + ESI + 1]
+			idiv r12w 
+			mov [RSP + ESI + 1], AL 
+			
+			mov AX, [RBX + ESI + 2]
+			idiv r12w 
+			mov [RSP + ESI + 2], AL
+			
 			
 			; check the loop counter 
-			inc r10d
-			cmp r10d, r15d 
+			add ESI, 3
+			cmp ESI, EBP 
 			jl .averagingLoop
 			
-			
-		pop RSP
-		pop r14
 		; check row_loop
-		inc ESP
-		cmp ESP, r14d
+		inc ECX
+		cmp ECX, r14d
 		jl .row_loop
 		
 	; done
 	; delete space reserved for row accumulator - to do 
-	
+
+	pop RBP ; retrieve the original value of image_width
 	pop RSP
-	pop RBP
 	ret
 	
 	
@@ -353,26 +358,24 @@ _vertical_blur_serial:
 	.calculate_edges:
 		; upperEdge = max(0, row - split); //PROBLEM!Only signed ints must be used here.
 		
-		mov ECX, ESP 
+		mov ESI, ECX 
 		sub ECX, r11d
 		cmp 0, ECX
-		
-		cmovs ECX, 0 ; set ECX to 0 if row - split is less than 0
+		cmovs ESI, 0 ; set SI (upperEdge) to 0 if row - split is less than 0
 		
 		
 		; lowerEdge = min(image_height - 1, row + split);
 		
 		; image_height - 1
-		mov EBX, r14d
-		dec EBX
+		lea EDI, [r14d-1]
 		
 		; row + split
-		lea ESI, [ESP + r11d]
+		lea r9d, [ECX + r11d]
 		
 		
 		; this might be incorrect, check it out later.I have no clue how cmovs works.
-		cmp EBX, ESI
-		cmovs ESI, EBX; if row + split is less than image_height - 1
+		cmp EDI, r9d
+		cmovs EDI, r9d; if row + split is less than image_height - 1
 		
 		ret 
 
