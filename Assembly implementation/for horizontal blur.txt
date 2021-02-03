@@ -58,14 +58,15 @@
 
 ; -----vertical  blur-----
 
+	
 ; tripleWidth = EBP
 ; rowAccumulatorPointer (doesn't change) -> RBX
 ; rowCounter (y) -> ECX
 ; upperEdge -> ESI
 ; lowerEdge -> EDI
-; blurredImagePixels (array) -> r9
+; blurredImagePixels (array) -> r8
 ; columnLoop (x) -> r10d
-; rowAccumulatorPointer (array) changes because of the innermost loop -> r8
+; rowAccumulatorPointer (array) changes because of the innermost loop -> r9
 ; temporarySinglePixelAccumulator (to get value from blurredImagePixels) -> SP
 ; temporarySinglePixelAccumulator2 (to get a value from rowAccumulator) -> AX
 
@@ -74,6 +75,5 @@
 	; y*tripleWidth -> EDI 
 	; value of rowAccumulator[x] -> AX
 	; image pointer -> RSP
-
 
 
