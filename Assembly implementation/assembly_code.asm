@@ -29,8 +29,8 @@ global row_accumulator
 global temporary_image_ptr
 
 SECTION .data 
-	blur_radius DW 5; 2 byte value enter this manually
-	split DW 2; 2 byte value.This value is equal to (blur_radius-1)/2.Enter this manually
+	blur_radius DW 13; 2 byte value enter this manually
+	split DW 6; 2 byte value.This value is equal to (blur_radius-1)/2.Enter this manually
 	
 	BMP_magic_number DW 19778 ; equals 19778
 	unsuccessful_image_load DB "Image can't be loaded"
@@ -170,7 +170,7 @@ _horizontal_blur_serial:
 	; div instruction: EDX:EAX contain the dividend, EDX must be unused (and zeroed out)
 	xor RDX, RDX
 	xor RSP, RSP ; used for pixel array indexing 
-	xor ECX, ECX ; row counter
+	xor RCX, RCX ; row counter
 	xor RDI, RDI
 	xor RBP, RBP
 	xor RSI, RSI
@@ -193,6 +193,8 @@ _horizontal_blur_serial:
 				mov ESP, ESI
 				imul ESP, ESP, 3
 				add ESP, ECX 
+				
+				xor RAX, RAX
 				
 				; [i counter] - loop from leftEdge to rightEdge (inclusive)
 				.blur_loop:
@@ -252,7 +254,7 @@ _horizontal_blur_serial:
 		imul EAX, r14d
 		imul EAX, EAX, 3
 		cmp ECX,  EAX; compare with 3*image_height*image_width
-		jb .rowLoop
+		jl .rowLoop
 		
 	; done
 	; pop RBP
