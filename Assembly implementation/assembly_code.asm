@@ -20,6 +20,7 @@ extern allocate_row_accumulator
 extern free_row_accumulator
 extern writePicture
 extern allocate_temporary_image_buffer
+extern allocateAlignedArray
 
 global first_pixel_address
 global image_width
@@ -29,8 +30,8 @@ global row_accumulator
 global temporary_image_ptr
 
 SECTION .data 
-	blur_radius DW 13; 2 byte value enter this manually
-	split DW 6; 2 byte value.This value is equal to (blur_radius-1)/2.Enter this manually
+	blur_radius DD 5; 4 byte value enter this manually
+	split DW 2; 4 byte value.This value is equal to (blur_radius-1)/2.Enter this manually
 	
 	BMP_magic_number DW 19778 ; equals 19778
 	unsuccessful_image_load DB "Image can't be loaded"
@@ -124,7 +125,8 @@ _blur_serial:
 	call allocate_temporary_image_buffer
 	
 	call _horizontal_blur_serial
-	call _vertical_blur_serial
+	call _vertical_blur_AVX
+	;call _vertical_blur_serial
 	
 	ret
 	
@@ -492,4 +494,303 @@ _vertical_blur_serial:
 
 
 
+_vertical_blur_AVX:
+
+	; ymm15 -> blur_radius
+	
+	; registers ymm0 to ymm6 are used as accumulators
+	
+	
+	; aligned_offload_area pointer -> RAX
+	; blurredImagePixels -> r12
+	; numOfReads -> EBX (= 3*imageWidth / 64)
+	; rowCounter (y) -> EDI 
+	; upperEdge -> ESI
+	; a copy of upperEdge -> EDX
+	; lowerEdge -> ECX
+	; AVXchunkCounter (0, ..., numOfReads) ->r8d
+	; 3 * i * imageWidth + 8*(7 * AVXchunkCounter + {0, 1, 2, ..., 7}) -> r9d, r10d
+	; temp AVX register -> ymm14
+	
+
+
+	
+	call allocateAlignedArray
+	push RAX
+	
+	mov r12, [temporary_image_ptr]
+	imul r15d, r15d, 3 ; image_width isn't needed, but 3*image_width is used multiple times
+	
+	xor RBX, RBX
+	mov eax, r15d
+	mov ESI, 56
+	div ESI ; divide 3*imageWidth by 56
+	mov EBX, EAX
+	mov r13, [first_pixel_address]
+	
+	pop RAX
+	
+	
+	vbroadcastss ymm15, [blur_radius] ; broadcast blur_radius to all elements of a 256-bit register
+	vcvtdq2ps ymm15, ymm15 ; converts 32-bit integers into 32-bit FP data.If there are unknown issues, this might be the cause because the same register is both source and destination.
+	
+	
+	xor RCX, RCX
+	xor RSI, RSI
+	xor r9, r9
+	xor r10, r10
+	xor r11, r11
+	xor RDX, RDX
+	
+	mov r11w, [split]
+
+	
+	
+	xor RDI, RDI
+	.rowLoop:
+		jmp .calculate_edges
+		.edgesCalculated:
+		xor r8, r8
+		.AVXchunkLoop:
+			jmp .zeroRegisters
+			.zeroedOut:
+			.blurLoop:
+				; &bytePointerBlurredImage[3 * i * imageWidth + 8*(7 * AVXchunkCounter + {0, 1, ..., 7})] -> r9d, r10d
+				; __m256i temp256 = _mm256_cvtepu8_epi32(*(__m128i*)&bytePointerBlurredImage[3 * i * imageWidth + 8*(7 * AVXchunkCounter + {0, 1, ..., 7})]); //PROBLEM!!!THIS MIGHT LEAD TO OUT OF BOUNDS MEMORY ACCESS.
+				
+				; registers ymm7 through ymm13 will be filled by doing the following using registers r9d and r10d:
+					; 8*(7 * AVXchunkCounter) + 8*{0, 1, ..., 7}
+					; 3 * i * imageWidth
+					
+				; bytePointerBlurredImage[ESI * tripleWidth + 8*r8d * 7 + {0, 8, 16, 24, 32, 40, 48}]
+				xor r9, r9
+				; this will be used for all 7 registers (ymm7-ymm14)
+				mov r9d, r8d ; move AVXChunkCounter to r9d
+				imul r9d, r9d, 56;7
+				;shl r9d, 3 ; multiply by 8.r9d now contains 8*7*AVXchunkCounter 
+				
+				mov r10d, r15d
+				imul r10d, ESI ; r10d now contains 3*i*imageWidth.Number 8 will have to be added to r9d for each next register
+				
+				add r9d, r10d ; r9d is now equal to 3*i*imageWidth + 8*7*AVXchunkCounter
+				lea r9, [r9 + r12] ; r9 is now equal to &horizontallyBlurredImagePointer[3*i*imageWidth + 8*7*AVXchunkCounter]
+				; ymm7
+				movdqu xmm14, [r9]
+				vpmovzxbd ymm7, xmm14; zero extend 8-bit data into 32-bit data.    
+				vpaddd ymm0, ymm0, ymm7  ; add new data to accumulator.             	    WARNING: THIS INSTRUCTION SHOULD RECEIVE 3 ARGUMENTS.
+				
+				add r9, 8
+				; ymm8
+				movdqu xmm14, [r9]
+				vpmovzxbd ymm8, xmm14
+				vpaddd ymm1, ymm1, ymm8 
+		
+				add r9, 8
+				; ymm9
+				movdqu xmm14, [r9]
+				vpmovzxbd ymm9, xmm14
+				vpaddd ymm2, ymm2, ymm9 
+				
+				add r9, 8
+				; ymm10
+				movdqu xmm14, [r9]
+				vpmovzxbd ymm10, xmm14
+				vpaddd ymm3, ymm3, ymm10
+				
+				add r9, 8
+				; ymm11
+				movdqu xmm14, [r9]
+				vpmovzxbd ymm11, xmm14
+				vpaddd ymm4, ymm4, ymm11
+				
+				add r9, 8
+				; ymm12
+				movdqu xmm14, [r9]
+				vpmovzxbd ymm12, xmm14
+				vpaddd ymm5, ymm5, ymm12
+				
+				add r9, 8
+				; ymm13
+				movdqu xmm14, [r9]
+				vpmovzxbd ymm13, xmm14
+				vpaddd ymm6, ymm6, ymm13
+				
+				
+				;check blurLoop
+				inc ESI 
+				cmp ESI, ECX
+				jle .blurLoop
+				
+			mov ESI, EDX ; get the original value of upperEdge (because ESI is used as counter in the loop that iterates from upperEdge to lowerEdge)
+				
+			; divide the values in accumulators by the radius value.This will be performed manually because there are no integer division AVX instructions
 			
+			; all of the registers use 32-bit integers.They have to be converted to 32-bit floating point data
+			vcvtdq2ps ymm0, ymm0
+			vcvtdq2ps ymm1, ymm1
+			vcvtdq2ps ymm2, ymm2
+			vcvtdq2ps ymm3, ymm3
+			vcvtdq2ps ymm4, ymm4
+			vcvtdq2ps ymm5, ymm5
+			vcvtdq2ps ymm6, ymm6
+			
+			; divide all the accumulators by blur_radius
+			vdivps ymm0, ymm0, ymm15    ; WARNING: THIS INSTRUCTION SHOULD TAKE 3 REGISTERS.   ALSO, THE ORDER MIGHT BE WRONG
+			vdivps ymm1, ymm1, ymm15
+			vdivps ymm2, ymm2, ymm15
+			vdivps ymm3, ymm3, ymm15
+			vdivps ymm4, ymm4, ymm15
+			vdivps ymm5, ymm5, ymm15
+			vdivps ymm6, ymm6, ymm15
+
+			
+			; convert them back to 32-bit integers
+			vcvttps2dq ymm0, ymm0
+			vcvttps2dq ymm1, ymm1
+			vcvttps2dq ymm2, ymm2
+			vcvttps2dq ymm3, ymm3
+			vcvttps2dq ymm4, ymm4
+			vcvttps2dq ymm5, ymm5
+			vcvttps2dq ymm6, ymm6
+			
+				
+			; extract the data out of them
+			; image[r15d * EDI + r8d * 56 + {0, 8, 16, 24, 32, 40, 48} + {0,1,2,3,4,5,6,7}] = (char)[RAX + {0, 4, 8, 12, 16, 20, 24, 28}]
+
+			
+			xor r9, r9
+			mov r9d, r15d
+			imul r9d, EDI ; r9d = r15d*EDI.This doesn't change for any register in the current row
+			imul r10d, r8d, 56
+			;shl r10d, 3 ; r10d = 8*avxChunk*7
+			
+			add r10d, r9d
+			mov r9d, r10d ; r9d now contains 56*avxChunk + r15d*EDI.For each next register, add 8*i (0-48)
+						
+			; extracting all 8 pixel components from a 256-bit register:
+				; mov temp8bitRegister, [RAX+{0, 4, 8, 12, 16, 20, 24, 28}]
+			
+			; image[r15d * EDI + r8d * 56 + {0,8,16,24,32,40,48} + {0,1,2,3,4,5,6,7}] = (unsigned char)(unloadArea[{0,4,8,12,16,20,24,28}]);
+			; ymm0
+			vmovdqa [RAX], ymm0
+			call .unloadingUtility
+					
+			lea r10d, [r9d + 8]
+			; ymm1
+			vmovdqa [RAX], ymm1
+			call .unloadingUtility
+			
+			lea r10d, [r9d + 16]
+			; ymm2
+			vmovdqa [RAX], ymm2
+			call .unloadingUtility
+			
+			lea r10d, [r9d + 24]
+			; ymm3
+			vmovdqa [RAX], ymm3
+			call .unloadingUtility
+			
+			lea r10d, [r9d + 32]
+			; ymm4
+			vmovdqa [RAX], ymm4
+			call .unloadingUtility
+			
+			lea r10d, [r9d + 40]
+			; ymm5
+			vmovdqa [RAX], ymm5
+			call .unloadingUtility
+			
+			lea r10d, [r9d + 48]
+			; ymm6
+			vmovdqa [RAX], ymm6
+			call .unloadingUtility
+		
+		
+			; check .AVXchunkLoop
+			inc r8d 
+			cmp r8d, EBX
+			jl .AVXchunkLoop
+		
+		; check .rowLoop
+		inc EDI 
+		cmp EDI, r14d
+		jl .rowLoop
+	
+	
+	ret
+	
+	
+	.calculate_edges:
+		; upperEdge = max(0, row - split); //PROBLEM!Only signed ints must be used here.
+		
+		;xor r9, r9
+		;xor rcx, rcx
+		mov ESI, EDI 
+		sub ESI, r11d
+		cmp ESI, 0 
+		jl .isNegative ; set SI (upperEdge) to 0 if row - split is less than 0
+		jmp .notNegative
+		.isNegative: ; set ESI to zero
+			xor ESI, ESI
+		.notNegative:
+		
+		; lowerEdge = min(image_height - 1, row + split);
+		
+		; image_height - 1
+		lea ECX, [r14d-1]
+		
+		; row + split
+		lea r9d, [EDI + r11d]
+		
+		
+		; this might be incorrect, check it out later.I have no clue how cmovs works.
+		cmp r9d, ECX
+		cmovs ECX, r9d; if row + split is less than image_height - 1...
+		mov EDX, ESI ; get a copy of upperEdge.This is needed because ECX is used as a counter so its value will be lost.
+		
+		jmp .edgesCalculated
+	
+	
+	.zeroRegisters:
+		vxorps ymm0, ymm0, ymm0
+		vxorps ymm1, ymm1, ymm1
+		vxorps ymm2, ymm2, ymm2
+		vxorps ymm3, ymm3, ymm3
+		vxorps ymm4, ymm4, ymm4
+		vxorps ymm5, ymm5, ymm5
+		vxorps ymm6, ymm6, ymm6
+		jmp .zeroedOut
+		
+		
+		
+	.unloadingUtility:
+			; add 1 do r10 for next register
+			
+			push RSI
+			; 1st int
+			mov SIL, [RAX]
+			mov [r13+r10], SIL
+			; 2nd int
+			mov SIL, [RAX + 4]
+			mov [r13+r10+1], SIL
+			; 3rd int
+			mov SIL, [RAX + 8]
+			mov [r13+r10+2], SIL
+			; 4th int
+			mov SIL, [RAX + 12]
+			mov [r13+r10+3], SIL		
+			; 5th int
+			mov SIL, [RAX + 16]
+			mov [r13+r10+4], SIL		
+			; 6th int
+			mov SIL, [RAX + 20]
+			mov [r13+r10+5], SIL		
+			; 7th int
+			mov SIL, [RAX + 24]
+			mov [r13+r10+6], SIL	
+			; 8th int
+			mov SIL, [RAX + 28]
+			mov [r13+r10+7], SIL
+			
+			pop RSI
+			ret		
