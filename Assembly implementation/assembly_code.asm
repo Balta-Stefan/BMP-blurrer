@@ -55,7 +55,7 @@ SECTION .bss
 	tempRSP resq 1
 	tempRBP resq 1
 	
-
+	temporaryValue resq 1
 	
 SECTION .text 
 global startAssembly
@@ -141,6 +141,7 @@ _blur:
 	call _vertical_blur_AVX	
 	ret
 	.isSerial:
+		;mov [temporaryValue], qword 0
 		call _vertical_blur_serial
 	
 	
@@ -355,14 +356,19 @@ _vertical_blur_serial:
 	mov [tempRSP], RSP 
 	mov [tempRBP], RBP
 	
-	imul EBP, r15d, 3
+	xor RBP, RBP
+	imul EBP, r15d, 3 ; EBP contains tripleWidth
+	mov r15d, EBP 
+	sub r15d, 3
 	
 	xor RDX, RDX
 	xor RAX, RAX
 	xor RDI, RDI
 	xor r8, r8
+	xor r10, r10
 	xor RCX, RCX
 	xor RSP, RSP
+	xor RSI, RSI 
 	
 
 	; [row counter] loop from 0 to image_height
@@ -388,10 +394,10 @@ _vertical_blur_serial:
 		
 		; blurredImageIndex = blurredImagePixels[upperEdge * tripleWidth]
 		xor r8, r8 ; this might be useless
-		mov r8d, ESI ; move upperEdge into r8d
-		imul r8d, EBP ; multiply r8d with tripleWidth
-		mov r9, [temporary_image_ptr]
-		add r8, r9
+		;mov r8d, ESI ; move upperEdge into r8d
+		;imul r8d, EBP ; multiply r8d with tripleWidth
+		;mov r9, [temporary_image_ptr]
+		;add r8, r9
 		
 		; r8 will now be used as blurredImagePixels[blurredImageIndex++]
 		
@@ -402,73 +408,100 @@ _vertical_blur_serial:
 		.blurLoop:
 			; [column counter] loop from 0 to image_width 
 			
-			xor r10, r10 ; .columnLoop counter
-			mov r9, RBX ; r9 now contains address to row_accumulator.RBX can't be used because .columnLoop has to iterate through row_accumulator
+			;mov r10d, ESI 
+			;imul r10d, EBP
+			mov r10d, [temporaryValue]
+			
+			; r9 should hold rowAccumulatorPointer + 2*startColumn
+			mov r9, [temporaryValue]
+			shl r9, 1
+			add r9, RBX
 			xor RSP, RSP
+			; put blurredImagePixels + i*tripleImageWidth + startingColumn into r8
+			mov r8, RSI
+			imul r8, RBP
+			; imul r8, RSI, RBP ; r8 now contains i*tripleImageWidth.This can't be done, 3 lines above do this.
+			add r8, [temporary_image_ptr]
+			add r8, [temporaryValue]
 			.columnLoop:
-				mov SPL, [r8] ; hopefully RSP doesn't have to be cleared because SP is used below
+				mov SPL, [r8] ; r8 is used to get blurredImagePointer data (horizontally blurred image data)
 				mov AX, [r9]
 				add AX, SP
 				mov [r9], AX
 				
-				inc r8
-				add r9, 2
-				mov SPL, [r8]
-				mov AX, [r9]
+				mov SPL, [r8+1]
+				mov AX, [r9+2]
 				add AX, SP
-				mov [r9], AX
+				mov [r9+2], AX
 				
-				inc r8
-				add r9, 2
-				mov SPL, [r8]
-				mov AX, [r9]
+				mov SPL, [r8+2]
+				mov AX, [r9+4]
 				add AX, SP
-				mov [r9], AX 
+				mov [r9+4], AX 
 				
-				inc r8
-				add r9, 2
-				
+				add r8, 3
+				add r9, 6
 				
 				; test .columnLoop
-				inc r10d
+				add r10d, 3 
 				cmp r10d, r15d
-				jl .columnLoop
+				jle .columnLoop
 				
 							
 			; check .blurLoop
-			inc ESI
-			cmp ESI, EDI 
+			inc ESI ; ESI is upperEdge 
+			cmp ESI, EDI  ; EDI is lowerEdge
 			jle .blurLoop
 		
 			
 		xor RSI, RSI
-		mov EDI, ECX ; put rowCounter (y) into EDI
-		imul EDI, EBP ; EDI = y * tripleWidth
-		lea RSP, [r13 + RDI] ; &image[tempIndex]
+		;mov EDI, ECX ; put rowCounter (y) into EDI
+		;imul EDI, EBP ; EDI = y * tripleWidth
+		;lea RSP, [r13 + RDI] ; &image[tempIndex]
 		
+		; put firstImagePixel + tripleImageWidth*ECX + startColumn into RSP and increment it for3 on every iteration
+		mov RSP, RBP
+		imul RSP, RCX
+		add RSP, r13
+		; lea RSP, [r13 + RBP*ECX] this can't be done, 3 lines of code above perform the same thing
+		add RSP, [temporaryValue]
+		
+		; put rowAccumulator + 2*startColumn into r9 and increment it for 6 on every iteration 
+		mov r9, [temporaryValue]
+		shl r9, 1
+		add r9, RBX ; r9 now holds rowAccumulator[2*startColumn]
+		
+		
+		; put rowAccumulator + 2*startColumn into r9 and increment it for 6 on every iteration 
+		; put firstImagePixel + tripleImageWidth*ECX + startColumn into RSP and increment it for 3 on every iteration
+		; RSI is the counter (x)
+		
+		mov ESI, [temporaryValue]
 		; might need to zero out the second (higher) division register
 		.averagingLoop:
 		
 			xor RDX, RDX
-			mov AX, [RBX + 2*RSI] ; rowAccumulator[x]
+			mov AX, [r9] ; rowAccumulator[x]
 			idiv r12w
-			mov [RSP + RSI], AL ; store the rowAccumulator[x] / blurRadius into image[tempIndex+x]
+			mov [RSP], AL ; store the rowAccumulator[x] / blurRadius into image[tempIndex+x]
 			
 			xor RDX, RDX
-			mov AX, [RBX + 2*RSI + 2]
+			mov AX, [r9 + 2]
 			idiv r12w 
-			mov [RSP + RSI + 1], AL 
+			mov [RSP + 1], AL 
 			
 			xor RDX, RDX
-			mov AX, [RBX + 2*RSI + 4]
+			mov AX, [r9 + 4]
 			idiv r12w 
-			mov [RSP + RSI + 2], AL
+			mov [RSP + 2], AL
 			
 			
+			add RSP, 3 
+			add r9, 6
 			; check the .averagingLoop counter 
 			add ESI, 3
-			cmp ESI, EBP 
-			jl .averagingLoop
+			cmp ESI, r15d 
+			jle .averagingLoop
 			
 		; check row_loop
 		inc ECX
@@ -765,6 +798,9 @@ _vertical_blur_AVX:
 	.leftOvers:
 		; unsigned int startingColumn = numOfReads * availableRegisters * 8;
 		imul EDI, EBX, 56
+		mov dword [temporaryValue], EDI
+		call _vertical_blur_serial
+		ret
 		
 		;unsigned int startingColumn = numOfReads * availableRegisters * 8; //8 is the number of floats that fit into a 256-bit register
         
