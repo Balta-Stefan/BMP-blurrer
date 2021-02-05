@@ -2,20 +2,26 @@
 #include <fstream>
 #include <cstring>
 
-//char pictureName = "fullHD.bmp";
+std::string pictureName;
 
+extern "C" void startAssembly();
 extern char* image_pointer;
 extern char* first_pixel_address;
 extern char* temporary_image_ptr;
 extern unsigned short image_width;
 extern unsigned short image_height;
 extern unsigned short* row_accumulator;
+extern int blur_radius;
+extern short split;
+extern char serial; //0 = perform serial computation.1 = perform computation with AVX.
+
 
 extern "C" int loadPicture();
 extern "C" void allocate_row_accumulator();
 extern "C" void free_row_accumulator();
 extern "C" void writePicture();
 extern "C" void allocate_temporary_image_buffer();
+extern "C" unsigned int* allocateAlignedArray();
 
 #pragma pack(1)
 struct BMP_file_header
@@ -49,12 +55,65 @@ struct headers
     DIB_header infoHeader;
 };
 
+int main(int argc, char** argv)
+{
+	if(argc != 4)
+	{
+		std::cout << "Enter arguments in the following format: <blur radius> <serial flag> <name of the picture>" << std::endl;
+		return -1;
+	}
+	
+	
+	try
+	{
+		 blur_radius = std::stoi(argv[1]);
+		 if(blur_radius <= 0 || blur_radius % 2 == 0)
+		 {
+			 std::cout << "Blur radius must be a positive odd number" << std::endl;
+			 return -1;
+		 }
+		 split = (blur_radius-1)/2;
+	}
+	catch(std::exception exc)
+	{
+		std::cout << "Wrong argument input" << std::endl;
+		return -1;
+	}
+	if(argv[2][0] == '0')
+		serial = 0;
+	
+		
+	else if(argv[2][0] == '1')
+		serial = 1;
+	
+	else 
+	{
+		std::cout << "Serial/AVX flag must be 0 or 1." << std::endl;
+		return -1;
+	}
+	
+	
+	pictureName = argv[3];
+	
+	if(loadPicture() != 0)
+	{
+		std::cout << "Error reading the input file." << std::endl;
+		return -1;
+	}
+	
+	startAssembly();
+	
+	return 0;
+}
+
+
+
 extern "C"
 {
 	int loadPicture()
 	{
 		
-		std::ifstream fileInput("fullHD.bmp", std::ios::in | std::ios::binary);
+		std::ifstream fileInput(pictureName.c_str(), std::ios::in | std::ios::binary);
 		headers metaData;
 		//int a = sizeof(headers);
 		if (!fileInput)
@@ -108,7 +167,7 @@ extern "C"
 {
 	void allocate_row_accumulator()
 	{
-		row_accumulator = new unsigned short[image_width*3];
+		row_accumulator = new unsigned short[3*image_width];
 	}
 }
 extern "C"
@@ -141,5 +200,13 @@ extern "C"
 		outputFile.write((char*)image_pointer, (std::streamsize)totalSize+sizeof(headers));
 		outputFile.close();
 
+	}
+}
+
+extern "C"
+{
+	unsigned int* allocateAlignedArray()
+	{
+		return (unsigned int*)aligned_alloc(32, 7 * sizeof(unsigned int)); //only 7 AVX registers will be used
 	}
 }

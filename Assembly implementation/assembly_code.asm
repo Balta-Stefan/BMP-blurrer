@@ -28,10 +28,16 @@ global image_height
 global image_pointer
 global row_accumulator
 global temporary_image_ptr
+global startAssembly
+global blur_radius
+global split
+global serial
+
 
 SECTION .data 
-	blur_radius DD 5; 4 byte value enter this manually
-	split DW 2; 4 byte value.This value is equal to (blur_radius-1)/2.Enter this manually
+	blur_radius DD 1; 4 byte value enter this manually
+	split DW 1; 4 byte value.This value is equal to (blur_radius-1)/2.Enter this manually
+	serial DB 1
 	
 	BMP_magic_number DW 19778 ; equals 19778
 	unsuccessful_image_load DB "Image can't be loaded"
@@ -49,8 +55,10 @@ SECTION .bss
 	tempRSP resq 1
 	tempRBP resq 1
 	
+
+	
 SECTION .text 
-global main
+global startAssembly
 
 
 _printErrorMessage:
@@ -63,12 +71,12 @@ _end:
 	mov RAX, 60
 	syscall
 
-main:
+startAssembly:
 	; pass imagePointer as parameter - to do 
-	call loadPicture
+	;call loadPicture
 	; check the return value of loadPicture.If it is zero, exit the program
-	cmp rax, 0
-	jne _end
+	;cmp rax, 0
+	;jne _end
 	; pass unsuccessfulImageLoad as parameter - to do
 	; call _printErrorMessage
 	
@@ -112,21 +120,29 @@ main:
 	mov r12w, word [blur_radius]
 	mov r11w, word [split]
 
-	call _blur_serial
+	call _blur
 	call writePicture
 	
+	ret
 	; blur operation done
 	call _end
 	
-_blur_serial:
+	
+_blur:
 	; allocate space for temporary_image_ptr of size image_width*image_height
 	
 	; this call destroys the values of r12 and r11 and potentially more.Why?
 	call allocate_temporary_image_buffer
 	
 	call _horizontal_blur_serial
-	call _vertical_blur_AVX
-	;call _vertical_blur_serial
+	
+	cmp byte [serial], 1
+	je .isSerial
+	call _vertical_blur_AVX	
+	ret
+	.isSerial:
+		call _vertical_blur_serial
+	
 	
 	ret
 	
@@ -318,7 +334,16 @@ _vertical_blur_serial:
 		
 		
 	; allocate space for row accumulator (put the pointer to RBX)
+	; RDI contains startingColumn parameter
+	
+
 	call allocate_row_accumulator
+	
+	xor r12, r12
+	mov r15w, [image_width] 
+	mov r12w, [blur_radius]
+
+		
 	xor r11, r11
 	mov r11w, [split]
 	mov RBX, [row_accumulator]
@@ -345,15 +370,16 @@ _vertical_blur_serial:
 		; zero out the row_accumulator - to do 
 			; std::memset(rowAccumulator, 0, imageWidth * sizeof(unsigned short) * 3);
 		xor r10, r10 ; r10 will be used as zeroingLoop counter
-		; mov ESI, EBP 
-		; shl ESI, 1 ; ESI now contains imageWidth*3*sizeof(unsigned short)
+		xor r8, r8
+		mov ESI, EBP 
+		shl ESI, 1 ; ESI now contains imageWidth*3*sizeof(unsigned short)
 		; mov RDI, [row_accumulator] ; RDI now contains the address of the row_accumulator
 		.zeroingLoop:
 			mov [RBX+2*r10], word 0
 			
 			; check zeroingLoop
 			inc r10d 
-			cmp r10d, EBP ; loop while r10d < imageWidth*3
+			cmp r10d, EBP ; loop while r10d < 3*imageWidth-startColumn (size of the row_accumulator)
 			jl .zeroingLoop
 			
 		
@@ -370,10 +396,12 @@ _vertical_blur_serial:
 		; r8 will now be used as blurredImagePixels[blurredImageIndex++]
 		
 		
+
 		
 		; [i counter] loop from upperEdge to lowerEdge (inclusive)
 		.blurLoop:
 			; [column counter] loop from 0 to image_width 
+			
 			xor r10, r10 ; .columnLoop counter
 			mov r9, RBX ; r9 now contains address to row_accumulator.RBX can't be used because .columnLoop has to iterate through row_accumulator
 			xor RSP, RSP
@@ -411,12 +439,12 @@ _vertical_blur_serial:
 			inc ESI
 			cmp ESI, EDI 
 			jle .blurLoop
+		
 			
 		xor RSI, RSI
 		mov EDI, ECX ; put rowCounter (y) into EDI
 		imul EDI, EBP ; EDI = y * tripleWidth
 		lea RSP, [r13 + RDI] ; &image[tempIndex]
-		
 		
 		; might need to zero out the second (higher) division register
 		.averagingLoop:
@@ -457,7 +485,7 @@ _vertical_blur_serial:
 	mov RSP, [tempRSP] 
 	mov RBP, [tempRBP]
 	
-	call free_row_accumulator
+	;call free_row_accumulator
 	ret
 	
 	
@@ -521,6 +549,8 @@ _vertical_blur_AVX:
 	mov r12, [temporary_image_ptr]
 	imul r15d, r15d, 3 ; image_width isn't needed, but 3*image_width is used multiple times
 	
+	xor RAX, RAX
+	xor RDX, RDX
 	xor RBX, RBX
 	mov eax, r15d
 	mov ESI, 56
@@ -717,8 +747,76 @@ _vertical_blur_AVX:
 		jl .rowLoop
 	
 	
+	; blur the leftovers 
+	; if((3*imageWidth) % 56 != 0)
+	
+	xor RAX, RAX
+	xor RDX, RDX
+	mov ESI, 56
+	idiv ESI
+	
+	cmp EDX, 56
+	jnz .leftOvers
+	
+	
 	ret
 	
+	
+	.leftOvers:
+		; unsigned int startingColumn = numOfReads * availableRegisters * 8;
+		imul EDI, EBX, 56
+		
+		;unsigned int startingColumn = numOfReads * availableRegisters * 8; //8 is the number of floats that fit into a 256-bit register
+        
+        ;unsigned int tripleWidth = imageWidth * 3;
+        ;for (unsigned int y = 0; y < imageHeight; y++)
+        ;{
+            ;unsigned int tempIndex = y * tripleWidth;
+            ;for (unsigned int x = startingColumn; x <= (tripleWidth - 3); x += 3) // !!!!!!!!!!!!!!!!!!!!!!!!!!!
+            ;{
+                ;image[tempIndex + x] = 0;
+                ;image[tempIndex + x + 1] = 0;
+                ;image[tempIndex + x + 2] = 0;
+            ;}
+        ;}
+        mov r14w, [image_height]
+        xor r15, r15
+        mov r15w, [image_width]
+        imul r15d, r15d, 3
+        
+        
+        xor RDX, RDX
+        xor RAX, RAX
+		mov r13, [first_pixel_address]
+        xor r8, r8
+        xor r9, r9 ; y 
+        
+        ;imul ESI, r15d, 3 ; r15d = tripleWidth
+        mov ECX, r15d
+        sub ECX, 3 ; ECX = tripleWidth - 3
+        .yLoop:
+			mov EAX, r15d
+			imul EAX, r9d ; EAX = tempIndex
+			mov EDX, EDI ; EDX = x
+			.xLoop:
+				lea r8, [r13 + RDX] ; temp
+				add r8, RAX
+				mov [r8], byte 0
+				mov [r8 + 1], byte 0
+				mov [r8 + 2], byte 0
+				; check xLoop
+				add EDX, 3
+				cmp EDX, ECX
+				jle .xLoop
+			
+        
+			; check yLoop
+			inc r9d
+			cmp r9d, r14d
+			jl .yLoop
+
+		
+		ret ; for .leftOvers
 	
 	.calculate_edges:
 		; upperEdge = max(0, row - split); //PROBLEM!Only signed ints must be used here.
