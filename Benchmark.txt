@@ -1,0 +1,41 @@
+Koristi se slika dimenzija 1920x1080 i radijus zamagljenja od 55 (kvadratna box blur matrica dimenzije 55).
+
+Assembly implementacija:
+-sa kompajlerskim optimizacijama:
+	-Os:
+		-bez AVX-a: 0.44 s
+		-sa AVX-om: 0.205 s
+	-O2:
+		-bez AVX-a: 0.44 s
+		-sa AVX-om: 0.205 s
+	-O3:
+		-segfault
+
+-bez kompajlerskih optimizacija:
+	-bez AVX-a: 0.43 s
+	-sa AVX-om: 0.205 s
+
+
+
+
+C++ implementacija (MSVC - release) + OpenMP
+-favor size (/O1):
+	-bez AVX-a: 0.28 s
+	-sa AVX-om: 0.19 s
+	-paralelizovano bez AVX-a: 0.09 s
+	-paralelizovano sa AVX-om: 0.07 s
+
+-favor speed (/O2):
+	-bez AVX-a: 0.28 s
+	-sa AVX-om: 0.19 s
+	-paralelizovano bez AVX-a: 0.08 s
+	-paralelizovano sa AVX-om: 0.07 s
+	
+	
+Zaključak: 
+Može se pretpostaviti da MSVC postiže iste performanse bez eksplicitnog korištenja AVX-a jer ih on sam koristi.
+Glavni zaključak je paralelizacija uz pomoć dodatnih jezgara bolja od paralelizacijom vektorskim instrukcijama.
+To je iz razloga što vektorske ekstenzije za x64 procesore ne podržavaju cjelobrojno dijeljenje.
+Pošto se vrijednosti komponenti piksela čuvaju kao cjelobrojni jednobajtni podaci, to znači da je prvo potrebno prošititi 
+te komponente u 32-bitne podatke, pa onda konvertovati u 32-bitni realni podatak.Nakon dijeljenja tog realnog podatka,
+potrebno ga je konvertovati nazad u cjelobrojni jednobajtni podatak.
