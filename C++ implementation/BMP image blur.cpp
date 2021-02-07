@@ -22,8 +22,8 @@ float blurRadiusFloat;
 unsigned int imageWidth;
 unsigned int imageHeight;
 unsigned int split;
-char* image;
 unsigned int pixelOffset;
+unsigned int BMP_magic_number = 19778;
 
 #pragma pack(1)
 struct BMP_file_header
@@ -92,7 +92,7 @@ void toGrayscale(char* image, unsigned int dataOffset, unsigned int size)
 
 
 
-void horizontalBlur(pixel* blurredImage, char* pixelData, unsigned int startRow, unsigned int endRow)
+void horizontalBlur(pixel* blurredImage, unsigned int imageWidth, unsigned int imageHeight, char* pixelData, unsigned int startRow, unsigned int endRow)
 {
     for (unsigned int y = startRow; y < endRow; y++)
     {
@@ -108,7 +108,7 @@ void horizontalBlur(pixel* blurredImage, char* pixelData, unsigned int startRow,
             unsigned short blueAccumulator = 0;
             for (unsigned int i = leftEdge; i <= rightEdge; i++)
             {
-                pixel tempPixel = *((pixel*)&image[3 * (y * imageWidth + i)]);
+                pixel tempPixel = *((pixel*)&pixelData[3 * (y * imageWidth + i)]);
                 redAccumulator += tempPixel.red;
                 greenAccumulator += tempPixel.green;
                 blueAccumulator += tempPixel.blue;
@@ -127,7 +127,7 @@ void horizontalBlur(pixel* blurredImage, char* pixelData, unsigned int startRow,
         }
     }
 }
-void verticalBlur(pixel* blurredImage, char* image, unsigned int startRow, unsigned int endRow, unsigned int startColumn)
+void verticalBlur(pixel* blurredImage, unsigned int imageWidth, unsigned int imageHeight, char* image, unsigned int startRow, unsigned int endRow, unsigned int startColumn)
 {
     unsigned int tripleWidth = imageWidth * 3;
     unsigned short* rowAccumulator = new unsigned short[tripleWidth];
@@ -205,7 +205,7 @@ void verticalBlur(pixel* blurredImage, char* image, unsigned int imageWidth, uns
 
 }*/
 
-void blur(std::string pictureName, char* image, unsigned int pixelOffset, unsigned int imageWidth, unsigned int imageHeight, unsigned int startRow, unsigned int endRow)
+void blur(std::string pictureName, char* image, unsigned int pixelOffset, unsigned int startRow, unsigned int endRow)
 {
     //naive implementation: width * height * intensity^2
     //blurring per each dimension separately: width*height*intensity + width*height*intensity = 2*width*height*intensity
@@ -226,9 +226,9 @@ void blur(std::string pictureName, char* image, unsigned int pixelOffset, unsign
     unsigned int imageSize = imageWidth * imageHeight;
     pixel* blurredImage = new pixel[imageSize];
 
-    horizontalBlur(blurredImage, image + pixelOffset, startRow, endRow);
+    horizontalBlur(blurredImage, imageWidth, imageHeight, image + pixelOffset, startRow, endRow);
     //memcpy(blurredImage, image + pixelOffset, imageSize*3);
-    verticalBlur(blurredImage, image + pixelOffset, startRow, endRow, 0);
+    verticalBlur(blurredImage, imageWidth, imageHeight, image + pixelOffset, startRow, endRow, 0);
 
     unsigned int totalSize = imageSize * 3;
 
@@ -256,10 +256,8 @@ void blur(std::string pictureName, char* image, unsigned int pixelOffset, unsign
 }
 
 
-void blurParallel(std::string pictureName, char* image, unsigned int pixelOffset, unsigned int imageWidth, unsigned int imageHeight)
+void blurParallel(std::string pictureName, char* image, unsigned int pixelOffset)
 {
-    //OpenMP brings very small speedup, almost insignificant
-
     auto start = std::chrono::high_resolution_clock::now();
 
     int split = (blurRadius - 1) / 2;
@@ -268,18 +266,18 @@ void blurParallel(std::string pictureName, char* image, unsigned int pixelOffset
 
     #pragma omp parallel for
     for (int y = 0; y < imageHeight; y++)
-        horizontalBlur(blurredImage, image + pixelOffset, y, y + 1);
+        horizontalBlur(blurredImage, imageWidth, imageHeight, image + pixelOffset, y, y + 1);
 
     //memcpy(blurredImage, image + pixelOffset, imageSize * 3);
     #pragma omp parallel for
     for (int y = 0; y < imageHeight; y++)
-        verticalBlur(blurredImage, image + pixelOffset, y, y + 1, 0);
+        verticalBlur(blurredImage, imageWidth, imageHeight, image + pixelOffset, y, y + 1, 0);
 
 
     auto stop = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> elapsed = stop - start;
 
-    std::cout << "elapsed time (parallel): " << elapsed.count(); //0.24 for cache thrashing version
+    std::cout << "elapsed time (parallel): " << elapsed.count(); 
 
     std::string outputFileName = pictureName + "_blurred_parallel.bmp";
 
@@ -486,11 +484,11 @@ void floatAVXvertical(pixel* blurredImage, char* image, unsigned int startRow, u
     if (((3 * imageWidth) % (8*availableRegisters)) != 0)
     {
         unsigned int startColumn = numOfReads * availableRegisters * 8;
-        verticalBlur(blurredImage, image, startRow, endRow, startColumn);
+        verticalBlur(blurredImage, imageWidth, imageHeight, image, startRow, endRow, startColumn);
     }
 }
 
-void blurAVX(std::string pictureName, char* image, unsigned int pixelOffset, unsigned int imageWidth, unsigned int imageHeight, bool serial)
+void blurAVX(std::string pictureName, char* image, unsigned int pixelOffset, bool serial)
 {
     auto start = std::chrono::high_resolution_clock::now();
 
@@ -498,13 +496,16 @@ void blurAVX(std::string pictureName, char* image, unsigned int pixelOffset, uns
     unsigned int imageSize = imageWidth * imageHeight;
     pixel* blurredImage = new pixel[imageSize];
 
+    std::string elapsedTimeMessage;
+
     std::string outputFileName = pictureName + "_blurred_";
     if (serial == false)
     {
+        elapsedTimeMessage = "parallel";
         outputFileName += "AVX_parallel.bmp";
         #pragma omp parallel for
         for (int y = 0; y < imageHeight; y++)
-            horizontalBlur(blurredImage, image + pixelOffset, y, y + 1);
+            horizontalBlur(blurredImage, imageWidth, imageHeight, image + pixelOffset, y, y + 1);
 
         #pragma omp parallel for
         for (int y = 0; y < imageHeight; y++)
@@ -513,8 +514,9 @@ void blurAVX(std::string pictureName, char* image, unsigned int pixelOffset, uns
     }
     else
     {
+        elapsedTimeMessage = "serial";
         outputFileName += "AVX_serial.bmp";
-        horizontalBlur(blurredImage, image + pixelOffset, 0, imageHeight);
+        horizontalBlur(blurredImage, imageWidth, imageHeight, image + pixelOffset, 0, imageHeight);
         floatAVXvertical(blurredImage, image + pixelOffset, 0, imageHeight);
 
         //blurVerticalAVX(blurredImage, image + pixelOffset, imageWidth, imageHeight, 0, imageHeight, split);
@@ -537,14 +539,14 @@ void blurAVX(std::string pictureName, char* image, unsigned int pixelOffset, uns
     auto stop = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> elapsed = stop - start;
 
-    std::cout << "elapsed time (AVX): " << elapsed.count(); //0.24 for cache thrashing version
+    std::cout << "elapsed time (AVX " + elapsedTimeMessage + "):" << elapsed.count(); //0.24 for cache thrashing version
 
     delete[] blurredImage;
 }
 
 
 
-bool loadPicture(std::string pictureName)
+bool loadPicture(std::string pictureName, char* &image)
 {
 	
 	std::ifstream fileInput(pictureName.c_str(), std::ios::in | std::ios::binary);
@@ -559,18 +561,14 @@ bool loadPicture(std::string pictureName)
 	fileInput.seekg(0);
 	
 	image = (char*)_aligned_malloc(size, 16); //16 byte memory alignment
-	//char* image = new char[size];
-	//std::cout << "before reading file" << std::endl;
 	if (!fileInput.read((char*)image, size))
 		return false;
-	//std::cout << "after reading file" << std::endl;
 
 	fileInput.close();
 	metaData = *((headers*)image);
 
-	//fileInput.read((char*)&metaData, sizeof(headers));
    
-	if (metaData.fileHeader.magicNumber != 19778)
+	if (metaData.fileHeader.magicNumber != BMP_magic_number)
 	{
 		std::cout << "Incorrect magic number" << std::endl;
 		return false;
@@ -592,6 +590,10 @@ bool loadPicture(std::string pictureName)
 	
 	return true;
 }
+
+
+
+
 int main(int argc, char** argv)
 {
 	if(argc != 4)
@@ -643,7 +645,8 @@ int main(int argc, char** argv)
 	
 	std::string pictureName = std::string(argv[3]);
 	
-	if(loadPicture(pictureName) == false)
+    char* image;
+	if(loadPicture(pictureName, image) == false)
 	{
 		std::cout << "Error reading the input file." << std::endl;
 		return -1;
@@ -652,16 +655,16 @@ int main(int argc, char** argv)
     switch (calculationType)
     {
         case 0:
-            blur(pictureName, image, pixelOffset, imageWidth, imageHeight, 0, imageHeight);
+            blur(pictureName, image, pixelOffset, 0, imageHeight);
             break;
         case 1:
-            blurParallel(pictureName, image, pixelOffset, imageWidth, imageHeight);
+            blurParallel(pictureName, image, pixelOffset);
             break;
         case 2:
-            blurAVX(pictureName, image, pixelOffset, imageWidth, imageHeight, true); //serial
+            blurAVX(pictureName, image, pixelOffset, true); //serial
             break;
         case 3:
-            blurAVX(pictureName, image, pixelOffset, imageWidth, imageHeight, false);
+            blurAVX(pictureName, image, pixelOffset, false);
             break;
     }
     _aligned_free(image);
@@ -671,6 +674,9 @@ int main(int argc, char** argv)
 int main(int argc, char** argv)
 {
     std::cout << "Leftover blurring in AVX blur hasn't been tested!!!" << std::endl;
+    blurRadius = 5;
+    split = 2;
+    blurRadiusFloat = (float)blurRadius;
 
     if (blurRadius % 2 == 0)
     {
@@ -680,7 +686,7 @@ int main(int argc, char** argv)
 
     std::ifstream fileInput("fullHD.bmp", std::ios::in | std::ios::binary);
     headers metaData;
-    int a = sizeof(headers);
+   
     if (!fileInput)
         return -1;
 
@@ -731,18 +737,21 @@ int main(int argc, char** argv)
 
 
     int pixelOffset = metaData.fileHeader.dataOffset;
-    unsigned int imageWidth = metaData.infoHeader.width;
-    unsigned int imageHeight = metaData.infoHeader.height;
-    unsigned int imageSize = imageWidth * imageHeight;
+    imageWidth = metaData.infoHeader.width;
+    imageHeight = metaData.infoHeader.height;
+    //imageSize = imageWidth * imageHeight;
 
-    //AVX - 0.04
-    //Parallel - 0.02
-    //serial - 0.035
+    //void blur(std::string pictureName, char* image, unsigned int pixelOffset, unsigned int imageWidth, unsigned int imageHeight, unsigned int startRow, unsigned int endRow)
 
-    blurAVX(image, pixelOffset, imageWidth, imageHeight, true); //serial
-    //blurAVX(image, pixelOffset, imageWidth, imageHeight, false); //parallel
-    //blurParallel(image, pixelOffset, imageWidth, imageHeight);
-    //blur(image, pixelOffset, imageWidth, imageHeight, 0, imageHeight);
+
+    //void blurParallel(std::string pictureName, char* image, unsigned int pixelOffset, unsigned int imageWidth, unsigned int imageHeight)
+
+
+    std::string name = "fullHD.bmp";
+    //blurAVX(name, image, pixelOffset, true); //serial
+    blurAVX(name, image, pixelOffset, false); //parallel
+    //blurParallel(name, image, pixelOffset);
+    //blur(name, image, pixelOffset, imageWidth, imageHeight, 0, imageHeight);
     //toGrayscale(image, pixelOffset, imageSize);
     //delete[] image;
     _aligned_free(image);
