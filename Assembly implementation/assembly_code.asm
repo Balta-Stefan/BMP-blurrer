@@ -275,7 +275,6 @@ _horizontal_blur_serial:
 	
 	ret 
 	
-	; PROBLEM!!!CMOVS might not be used correctly
 	.calculate_edges:
 		; leftEdge = max(0, (signed short)columnLoop - (signed short)split);
 		
@@ -515,9 +514,9 @@ _vertical_blur_serial:
 	
 	
 
-	; PROBLEM!!!CMOVS might not be used correctly
+	
 	.calculate_edges:
-		; upperEdge = max(0, row - split); //PROBLEM!Only signed ints must be used here.
+		; upperEdge = max(0, row - split);
 		
 		mov ESI, ECX 
 		sub ESI, r11d
@@ -847,7 +846,7 @@ _vertical_blur_AVX:
 		ret ; for .leftOvers
 	
 	.calculate_edges:
-		; upperEdge = max(0, row - split); //PROBLEM!Only signed ints must be used here.
+		; upperEdge = max(0, row - split);
 		
 		;xor r9, r9
 		;xor rcx, rcx
