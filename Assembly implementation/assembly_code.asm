@@ -1,11 +1,3 @@
-; there is a problem with the way I am passing messages to the _printErrorMessage
-; I am passing messages as arguments regardless of whether an error occured
-
-; TO DO:
-; allow the user to pass blur radius as argument.The program has to check if the value is odd or even (it must be odd).
-
-
-
 ; register r15d holds image_width
 ; register r14d holds image_height 
 ; register r13 is holding the address of the beginning of the picture pixels.
