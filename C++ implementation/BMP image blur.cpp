@@ -153,15 +153,25 @@ void verticalBlur(pixel* blurredImage, unsigned int imageWidth, unsigned int ima
         }
 
         unsigned int sharedIndex = tripleWidth * y;
-        for (unsigned int x = startColumn; x <= (tripleWidth-3); x += 3)
+        unsigned int x = startColumn;
+        for (; x <= (tripleWidth-3); x += 3)
         {   
-            unsigned short temp1 = rowAccumulator[x] /= blurRadius;
-            unsigned short temp2 = rowAccumulator[x + 1] /= blurRadius;
-            unsigned short temp3 = rowAccumulator[x + 2] /= blurRadius;
+            rowAccumulator[x] /= blurRadius;
+            rowAccumulator[x + 1] /= blurRadius;
+            rowAccumulator[x + 2] /= blurRadius;
 
             image[sharedIndex + x] = rowAccumulator[x];
             image[sharedIndex + x + 1] = rowAccumulator[x + 1];
             image[sharedIndex + x + 2] = rowAccumulator[x + 2];
+        }
+
+        if (x != tripleWidth)
+        {
+            for (; x < tripleWidth; x++)
+            {
+                rowAccumulator[x] /= blurRadius;
+                image[sharedIndex + x] = rowAccumulator[x];
+            }
         }
     }
     delete[] rowAccumulator;
@@ -214,7 +224,7 @@ void blur(std::string pictureName, char* image, unsigned int pixelOffset, unsign
 
     /*
         Benchmark:
-        -radius 3:   0.15 (cache thrashing version), 0.1 (cache efficient version)
+        -radius 3:   0.15 (cache thrashing version), 0.1 (cache efficientavx version)
         -radius 5:   0.17 (cache thrashing version), 0.12 (cache efficient version)
         -radius 11:  0.22 (cache thrashing version), 0.18 (cache efficient version)
         -radius 15:  0.25 (cache thrashing version), 0.22 (cache efficient version)
@@ -421,7 +431,7 @@ void floatAVXvertical(pixel* blurredImage, char* image, unsigned int startRow, u
 
     //Due to all the casts, this is not much faster than the non-AVX implementation.In fact, this can even be slower than performing this without AVX.
 
-    unsigned short availableRegisters = 8; //there are 16 registers in total.8 of them will be used as accumulators, other 8 will receive new values
+    unsigned short availableRegisters = 7; //there are 16 registers in total.8 of them will be used as accumulators, other 8 will receive new values
 
     unsigned int numOfReads = 3 * imageWidth / (8*availableRegisters); //how many times a row can be read using 128-bit register.16 8-bit pixel components can fit into a 128-bit register.Leftovers will be handled manually
     //unsigned short* leftoverAccumulator = nullptr;
