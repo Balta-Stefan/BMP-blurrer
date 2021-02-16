@@ -1,3 +1,11 @@
+; there is a problem with the way I am passing messages to the _printErrorMessage
+; I am passing messages as arguments regardless of whether an error occured
+
+; TO DO:
+; allow the user to pass blur radius as argument.The program has to check if the value is odd or even (it must be odd).
+
+
+
 ; register r15d holds image_width
 ; register r14d holds image_height 
 ; register r13 is holding the address of the beginning of the picture pixels.
@@ -275,6 +283,7 @@ _horizontal_blur_serial:
 	
 	ret 
 	
+	; PROBLEM!!!CMOVS might not be used correctly
 	.calculate_edges:
 		; leftEdge = max(0, (signed short)columnLoop - (signed short)split);
 		
@@ -494,6 +503,24 @@ _vertical_blur_serial:
 			cmp ESI, r15d 
 			jle .averagingLoop
 			
+		; continue the averaging loop for leftovers (because the loop is unrolled into 3 averaging operations, some will be left over in the general case which will be handled one by one)
+		cmp ESI, EBP ; if ESI is equal to EBP (triple width), there are no leftovers
+		je .no_leftovers
+		
+		.leftover_averaging_loop:
+			xor RDX, RDX
+			mov AX, [r9]
+			idiv r12w
+			mov [RSP], AL
+			
+			inc RSP
+			add r9, 2
+			; check leftover_averaging_loop counter 
+			inc ESI
+			cmp ESI, EBP
+			jl .leftover_averaging_loop
+		
+		.no_leftovers:	
 		; check row_loop
 		inc ECX
 		cmp ECX, r14d
@@ -514,9 +541,9 @@ _vertical_blur_serial:
 	
 	
 
-	
+	; PROBLEM!!!CMOVS might not be used correctly
 	.calculate_edges:
-		; upperEdge = max(0, row - split);
+		; upperEdge = max(0, row - split); //PROBLEM!Only signed ints must be used here.
 		
 		mov ESI, ECX 
 		sub ESI, r11d
@@ -846,7 +873,7 @@ _vertical_blur_AVX:
 		ret ; for .leftOvers
 	
 	.calculate_edges:
-		; upperEdge = max(0, row - split);
+		; upperEdge = max(0, row - split); //PROBLEM!Only signed ints must be used here.
 		
 		;xor r9, r9
 		;xor rcx, rcx
