@@ -1,3 +1,6 @@
+# Description
+This project contains 2 programs that blur BMP images (box blur). One is written in Assembly, other one is written in C++.
+
 Performance comparison:  
 |                 | serial (no AVX) | AVX    |
 |:---------------:| :-------------: | :----: |
