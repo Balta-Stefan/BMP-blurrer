@@ -1,5 +1,5 @@
 # Description
-This project contains 2 programs that blur BMP images (box blur). One is written in Assembly, other one is written in C++.
+This project contains 2 programs that blur BMP images (box blur algorithm). One is written in Assembly, the other one is written in C++ with /O2 optimization level.
 
 Performance comparison:  
 |                 | serial (no AVX) | AVX    |
